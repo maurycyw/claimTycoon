@@ -21,6 +21,7 @@ namespace ClaimTycoon.Systems.Terrain
         [Header("Prefabs")]
         [SerializeField] private GameObject dirtPrefab;
         [SerializeField] private GameObject bedrockPrefab;
+        [SerializeField] private GameObject waterPrefab;
 
         private Dictionary<Vector3Int, TileType> gridData = new Dictionary<Vector3Int, TileType>();
         private Dictionary<Vector3Int, GameObject> activeTiles = new Dictionary<Vector3Int, GameObject>();
@@ -43,11 +44,21 @@ namespace ClaimTycoon.Systems.Terrain
             {
                 for (int z = 0; z < gridSize.y; z++)
                 {
-                    // Create a layer of dirt at height 0
-                    CreateTile(new Vector3Int(x, 0, z), TileType.Dirt);
-                    
-                    // Create bedrock below
-                    CreateTile(new Vector3Int(x, -1, z), TileType.Bedrock); 
+                    // Create River at x = 0 to 2 for example, or a strip across Z
+                    // Let's make a river at x = 4
+                    if (x == 4)
+                    {
+                        CreateTile(new Vector3Int(x, -1, z), TileType.Water);
+                        // Do not create dirt on top of water
+                    }
+                    else
+                    {
+                        // Create a layer of dirt at height 0
+                        CreateTile(new Vector3Int(x, 0, z), TileType.Dirt);
+                        
+                        // Create bedrock below
+                        CreateTile(new Vector3Int(x, -1, z), TileType.Bedrock);
+                    }
                 }
             }
         }
@@ -58,7 +69,15 @@ namespace ClaimTycoon.Systems.Terrain
 
             gridData[coord] = type;
 
-            GameObject prefabToSpawn = type == TileType.Dirt ? dirtPrefab : bedrockPrefab;
+            gridData[coord] = type;
+
+            GameObject prefabToSpawn = null;
+            switch(type) {
+                case TileType.Dirt: prefabToSpawn = dirtPrefab; break;
+                case TileType.Bedrock: prefabToSpawn = bedrockPrefab; break;
+                case TileType.Water: prefabToSpawn = waterPrefab; break;
+            }
+
             if (prefabToSpawn != null)
             {
                 GameObject tileObj = Instantiate(prefabToSpawn, transform);
@@ -89,6 +108,29 @@ namespace ClaimTycoon.Systems.Terrain
         public bool TryGetTile(Vector3Int coord, out TileType type)
         {
             return gridData.TryGetValue(coord, out type);
+        }
+        public bool IsAdjacentToWater(Vector3Int coord)
+        {
+            Vector3Int[] neighbors = new Vector3Int[]
+            {
+                coord + Vector3Int.left,
+                coord + Vector3Int.right,
+                coord + Vector3Int.forward,
+                coord + Vector3Int.back
+            };
+
+            foreach (var n in neighbors)
+            {
+                // Check immediate neighbors at current level and below (where water is)
+                // Water is at y = -1
+                Vector3Int waterCheck = new Vector3Int(n.x, -1, n.z);
+                
+                if (gridData.TryGetValue(waterCheck, out TileType type))
+                {
+                    if (type == TileType.Water) return true;
+                }
+            }
+            return false;
         }
     }
 }

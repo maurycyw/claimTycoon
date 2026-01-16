@@ -19,20 +19,25 @@ Enable the player to spend their earned Money to purchase and place objects (Bas
     *   Click to Place (Instantiate real prefab).
 *   **Validation**:
     *   Can only place on "Dirt" (or cleared land?).
+    *   **New Rule**: Sluice Box must be placed adjacent to a Water tile.
     *   Cannot place on top of other objects.
 
-## 3. The Object (Auto-Miner)
-*   **Simplest Logic**:
-    *   Just a visual block for now?
-    *   Or better: Every X seconds, it calls `ResourceManager.AddGold(0.1f)`.
-    *   Let's go with the passive income generator for immediate feedback.
+## 3. The Object (River Run Sluice Box)
+*   **Logic**:
+    *   Passive income generator (simulates washing dirt).
+    *   Every X seconds: `ResourceManager.AddGold(0.2f)`.
+*   **Terrain Update**:
+    *   Need to generate a "River" in the `TerrainManager`.
 
 ## 4. Tasks
+*   [ ] **Terrain**:
+    *   [ ] Update `TerrainManager.cs` to generate a Water river.
 *   [ ] **Core Logic**:
-    *   [ ] Create `BuildingManager.cs` (Handles placement state).
-    *   [ ] Create `AutoMiner.cs` (Passive income logic).
+    *   [ ] Create `BuildingManager.cs` (Handles placement & validation).
+    *   [ ] Create `SluiceBox.cs` (Passive income logic).
 *   [ ] **UI**:
     *   [ ] Create `ShopController.cs`.
-    *   [ ] Add Shop Panel & Item Button.
+    *   [ ] Add Shop Panel & Sluice Box Button.
 *   [ ] **Assets**:
-    *   [ ] Create "AutoMiner" Prefab (Just a block of a different color, e.g., Blue).
+    *   [ ] Create "Water" Prefab (Blue).
+    *   [ ] Create "SluiceBox" Prefab.
