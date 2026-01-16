@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 using ClaimTycoon.Systems.Terrain;
+using ClaimTycoon.Managers;
 
 namespace ClaimTycoon.Controllers
 {
@@ -62,7 +63,10 @@ namespace ClaimTycoon.Controllers
             if (Random.value < miningChance)
             {
                 Debug.Log("Found Gold Nugget!");
-                // SpawnGold(coord); // TODO: Implement gold spawning
+                if (ResourceManager.Instance != null)
+                {
+                    ResourceManager.Instance.AddGold(0.5f);
+                }
             }
         }
     }
