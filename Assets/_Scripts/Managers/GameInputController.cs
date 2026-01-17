@@ -3,6 +3,7 @@ using UnityEngine.InputSystem;
 using ClaimTycoon.Controllers;
 using ClaimTycoon.Systems.Terrain;
 using ClaimTycoon.Systems.Buildings;
+using ClaimTycoon.Systems.Units.Jobs;
 
 namespace ClaimTycoon.Managers
 {
@@ -16,6 +17,11 @@ namespace ClaimTycoon.Managers
 
         private static GameInputController _instance;
         private int instanceId;
+
+        // Auto Mine Selection State
+        private bool isSelectingAutoMineLocation = false;
+        private SluiceBox pendingAutoMineSluice;
+        private GameObject selectionIndicator;
 
         private void Awake()
         {
@@ -38,6 +44,26 @@ namespace ClaimTycoon.Managers
                 playerUnit = FindFirstObjectByType<UnitController>();
                 if (playerUnit == null) Debug.LogError("GameInputController: No UnitController found!");
             }
+
+            // Create Selection Indicators
+            CreateSelectionIndicator();
+        }
+
+        private void CreateSelectionIndicator()
+        {
+            selectionIndicator = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            selectionIndicator.name = "AutoMineIndicator";
+            selectionIndicator.transform.SetParent(transform);
+            Destroy(selectionIndicator.GetComponent<Collider>()); // Visual only
+            
+            // Flatten cylinder to look like a circle/area
+            selectionIndicator.transform.localScale = new Vector3(10f, 0.1f, 10f); 
+            
+            if (selectionIndicator.GetComponent<Renderer>() != null)
+            {
+                selectionIndicator.GetComponent<Renderer>().material.color = new Color(0, 1, 1, 0.5f); // Cyan transparent
+            }
+            selectionIndicator.SetActive(false);
         }
 
         private void Update()
@@ -49,7 +75,19 @@ namespace ClaimTycoon.Managers
 
             if (Mouse.current != null)
             {
-                 // Left Click: Movement OR Selection
+                // Check if mouse is over UI
+                if (UnityEngine.EventSystems.EventSystem.current != null && UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject())
+                {
+                    return;
+                }
+
+                if (isSelectingAutoMineLocation)
+                {
+                    HandleSelectionMode();
+                    return; // Consumes all input
+                }
+
+                // Left Click: Movement OR Selection
                 if (Mouse.current.leftButton.wasPressedThisFrame)
                 {
                     HandleLeftClick();
@@ -81,16 +119,18 @@ namespace ClaimTycoon.Managers
                     if (sluice != null)
                     {
                          Debug.Log("Left Click Action: Feed Sluice");
-                         selectedUnit.StartJob(JobType.FeedSluice, Vector3Int.zero, hit.point, sluice);
+                         selectedUnit.StartJob(new FeedSluiceJob(Vector3Int.zero, hit.point, sluice));
                          return; // Action consumed click
                     }
 
+
                     // 2. Check for Terrain -> Drop Dirt
-                    if (((1 << hit.collider.gameObject.layer) & interactionLayer) != 0)
+                    // Raycast SPECIFICALLY for Terrain to avoid Unit blocking
+                    if (Physics.Raycast(ray, out RaycastHit terrainHit, 1000f, interactionLayer))
                     {
                         float cellSize = TerrainManager.Instance.CellSize;
-                        int x = Mathf.RoundToInt(hit.point.x / cellSize);
-                        int z = Mathf.RoundToInt(hit.point.z / cellSize);
+                        int x = Mathf.RoundToInt(terrainHit.point.x / cellSize);
+                        int z = Mathf.RoundToInt(terrainHit.point.z / cellSize);
                         Vector3Int coord = new Vector3Int(x, 0, z);
 
                         if (TerrainManager.Instance.TryGetTile(coord, out TileType type))
@@ -98,7 +138,7 @@ namespace ClaimTycoon.Managers
                             if (type == TileType.Dirt)
                             {
                                  Debug.Log("Left Click Action: Drop Dirt");
-                                 selectedUnit.StartJob(JobType.DropDirt, coord, hit.point);
+                                 selectedUnit.StartJob(new DropDirtJob(coord, terrainHit.point));
                                  return; // Action consumed click
                             }
                         }
@@ -158,17 +198,20 @@ namespace ClaimTycoon.Managers
                      if (selectedUnit.IsCarryingDirt)
                      {
                          Debug.Log("Command: Feed Sluice");
-                         selectedUnit.StartJob(JobType.FeedSluice, Vector3Int.zero, hit.point, sluice); 
+                         selectedUnit.StartJob(new FeedSluiceJob(Vector3Int.zero, sluice.GetInteractionPosition(), sluice)); 
                      }
                      else
                      {
-                         Debug.Log("Command: Cleanup Sluice");
-                         sluice.Interact(); // Or Unit moves to interact? Current logic is immediate interact for cleanup.
-                         // Ideally: Unit moves there then interacts. 
-                         // For now keeping 'Interact' from distance or assuming close enough if we want consistent job system.
-                         // Let's make it a pseudo-job for consistency? 
-                         // Or stick to Sluice.Interact() being "Player action" vs "Unit Action".
-                         // UnitController doesn't have "Cleanup" job yet.
+                         if (Keyboard.current.shiftKey.isPressed)
+                         {
+                             Debug.Log("Command: Enter Auto Mining Selection Mode");
+                             StartAutoMineSelection(sluice);
+                         }
+                         else
+                         {
+                             Debug.Log("Command: Cleanup Sluice");
+                             sluice.Interact(); 
+                         }
                      }
                       return;
                 }
@@ -188,18 +231,102 @@ namespace ClaimTycoon.Managers
                             if (selectedUnit.IsCarryingDirt)
                             {
                                  Debug.Log("Command: Drop Dirt");
-                                 selectedUnit.StartJob(JobType.DropDirt, coord, hit.point);
+                                 selectedUnit.StartJob(new DropDirtJob(coord, hit.point));
                             }
                             else
                             {
                                 Debug.Log("Command: Dig Dirt");
-                                selectedUnit.StartJob(JobType.Mine, coord, hit.point);
+                                selectedUnit.StartJob(new MineJob(coord, hit.point));
                             }
                             return;
                         }
                     }
                 }
             }
+        }
+        private void StartAutoMineSelection(SluiceBox sluice)
+        {
+            isSelectingAutoMineLocation = true;
+            pendingAutoMineSluice = sluice;
+            if (selectionIndicator != null) selectionIndicator.SetActive(true);
+        }
+
+        private void HandleSelectionMode()
+        {
+            // Raycast to Terrain
+            Vector2 mousePos = Mouse.current.position.ReadValue();
+            Ray ray = mainCamera.ScreenPointToRay(mousePos);
+            
+            // Only hit Terrain
+            if (Physics.Raycast(ray, out RaycastHit hit, 1000f, interactionLayer)) // Assuming interactionLayer includes terrain
+            {
+                if (selectionIndicator != null)
+                {
+                    selectionIndicator.transform.position = hit.point;
+                }
+
+                // Confirm on Left Click
+                if (Mouse.current.leftButton.wasPressedThisFrame)
+                {
+                    Vector3Int mineCenter = new Vector3Int(Mathf.RoundToInt(hit.point.x / TerrainManager.Instance.CellSize), 0, Mathf.RoundToInt(hit.point.z / TerrainManager.Instance.CellSize));
+                    
+                    // Visual Pulse
+                    StartCoroutine(PulseSelection(hit.point));
+
+                    // Start Mining
+                    UnitController selectedUnit = SelectionManager.Instance.SelectedUnit;
+                    if (selectedUnit != null && pendingAutoMineSluice != null)
+                    {
+                        selectedUnit.StartAutoMining(mineCenter, pendingAutoMineSluice);
+                    }
+                    
+                    // Cleanup State
+                    isSelectingAutoMineLocation = false;
+                    pendingAutoMineSluice = null;
+                }
+            }
+            
+            // Cancel on Right Click or Escape
+            if (Mouse.current.rightButton.wasPressedThisFrame || Keyboard.current.escapeKey.wasPressedThisFrame)
+            {
+                 Debug.Log("Auto Mining Selection Cancelled.");
+                 isSelectingAutoMineLocation = false;
+                 pendingAutoMineSluice = null;
+                 if (selectionIndicator != null) selectionIndicator.SetActive(false);
+            }
+        }
+
+        private System.Collections.IEnumerator PulseSelection(Vector3 position)
+        {
+            GameObject pulseObj = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            Destroy(pulseObj.GetComponent<Collider>());
+            pulseObj.transform.position = position;
+            pulseObj.transform.localScale = selectionIndicator.transform.localScale;
+             if (pulseObj.GetComponent<Renderer>() != null)
+                pulseObj.GetComponent<Renderer>().material.color = Color.green;
+
+            float duration = 0.5f;
+            float elapsed = 0f;
+            Vector3 startScale = pulseObj.transform.localScale;
+            Vector3 targetScale = startScale * 1.5f;
+
+            while (elapsed < duration)
+            {
+                float t = elapsed / duration;
+                pulseObj.transform.localScale = Vector3.Lerp(startScale, targetScale, t);
+                 if (pulseObj.GetComponent<Renderer>() != null)
+                 {
+                    Color c = pulseObj.GetComponent<Renderer>().material.color;
+                    c.a = Mathf.Lerp(0.5f, 0f, t);
+                    pulseObj.GetComponent<Renderer>().material.color = c;
+                 }
+                
+                elapsed += Time.deltaTime;
+                yield return null;
+            }
+            
+            Destroy(pulseObj);
+            if (selectionIndicator != null) selectionIndicator.SetActive(false);
         }
     }
 }

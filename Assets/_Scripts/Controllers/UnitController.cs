@@ -4,48 +4,60 @@ using System.Collections;
 using System.Collections.Generic;
 using ClaimTycoon.Systems.Units;
 using ClaimTycoon.Systems.Terrain;
-using ClaimTycoon.Systems.Buildings; // Added for SluiceBox
+using ClaimTycoon.Systems.Buildings;
 using ClaimTycoon.Managers;
+using ClaimTycoon.Systems.Units.Jobs;
 
 namespace ClaimTycoon.Controllers
 {
-    public enum UnitState { Idle, Moving, Working }
-    public enum JobType { None, Mine, DropDirt, FeedSluice, Build }
+    public enum UnitState { Idle, Moving, Working, AutoMining }
+    public enum JobType { None, Mine, DropDirt, FeedSluice, Build, CleanSluice }
 
     [RequireComponent(typeof(NavMeshAgent))]
     [RequireComponent(typeof(CharacterStats))]
+    [RequireComponent(typeof(AutoMiner))]
     public class UnitController : MonoBehaviour
     {
         private NavMeshAgent agent;
         private CharacterStats stats;
+        private AutoMiner autoMiner;
         
         [Header("State")]
         [SerializeField] private UnitState currentState = UnitState.Idle;
         public bool IsCarryingDirt { get; private set; } 
 
-        private JobType currentJob = JobType.None;
-        private Vector3Int jobTargetCoord;
-        private SluiceBox targetSluice; 
-        private ConstructionSite targetSite; // New Target
+        // New Job System
+        private IJob activeJob = null;
+
+        // Stuck Detection
+        private float stuckTimer = 0f;
+        private Vector3 lastPosition;
+        private const float STUCK_TIMEOUT = 3.0f;
+        private const float MOVE_THRESHOLD = 0.1f;
+
+        // Job Queue
+        private Queue<IJob> jobQueue = new Queue<IJob>();
+
+        public bool IsProcessingJob => currentState == UnitState.Working || currentState == UnitState.Moving;
 
         private void Awake()
         {
             agent = GetComponent<NavMeshAgent>();
             stats = GetComponent<CharacterStats>();
+            autoMiner = GetComponent<AutoMiner>();
             
-            // Disable agent initially to prevent "Failed to create agent" if NavMesh isn't ready
+            if (autoMiner == null) autoMiner = gameObject.AddComponent<AutoMiner>();
+
             if (agent != null) agent.enabled = false;
         }
 
         private void Start()
         {
-            // Wait for Terrain/NavMesh to build
             StartCoroutine(InitializeAgent());
         }
 
         private IEnumerator InitializeAgent()
         {
-            // Wait 2 frames to ensure NavMeshSurface.BuildNavMesh() has finished
             yield return null;
             yield return null;
 
@@ -53,9 +65,18 @@ namespace ClaimTycoon.Controllers
             {
                 agent.enabled = true;
                 
-                if (NavMesh.SamplePosition(transform.position, out NavMeshHit hit, 5.0f, NavMesh.AllAreas))
+                Vector3Int center = new Vector3Int(TerrainManager.Instance.GridSize.x / 2, 0, TerrainManager.Instance.GridSize.y / 2);
+                Vector3? spawnPos = FindSafeSpawnPoint(center);
+
+                if (spawnPos.HasValue)
+                {
+                    agent.Warp(spawnPos.Value);
+                    Debug.Log($"[UnitController] Player spawned at closest safe point: {spawnPos.Value}");
+                }
+                else if (NavMesh.SamplePosition(transform.position, out NavMeshHit hit, 5.0f, NavMesh.AllAreas))
                 {
                     agent.Warp(hit.position);
+                    Debug.LogWarning("[UnitController] Could not find safe center spawn. Warped to closest NavMesh point.");
                 }
                 
                 Stat moveStat = stats.GetStat(StatType.MoveSpeed);
@@ -64,222 +85,275 @@ namespace ClaimTycoon.Controllers
                 else
                     agent.speed = 3.5f; 
 
-                agent.stoppingDistance = 0.2f; // Reduced from 1.0f
+                agent.stoppingDistance = 0.2f;
                 Debug.Log("Unit Agent Initialized. Stopping Distance set to 0.2f.");
+                
+                CameraController cam = FindFirstObjectByType<CameraController>();
+                if (cam != null)
+                {
+                    cam.FocusOn(agent.transform.position);
+                }
             }
+        }
+
+        private Vector3? FindSafeSpawnPoint(Vector3Int center)
+        {
+            int maxRadius = Mathf.Max(TerrainManager.Instance.GridSize.x, TerrainManager.Instance.GridSize.y) / 2;
+            
+            for (int r = 0; r <= maxRadius; r++)
+            {
+                for (int x = -r; x <= r; x++)
+                {
+                    for (int z = -r; z <= r; z++)
+                    {
+                        if (Mathf.Abs(x) != r && Mathf.Abs(z) != r) continue;
+
+                        Vector3Int checkPos = center + new Vector3Int(x, 0, z);
+                        
+                        if (TerrainManager.Instance.TryGetTile(checkPos, out TileType type))
+                        {
+                            float waterDepth = 0f;
+                            if (WaterManager.Instance != null)
+                            {
+                                waterDepth = WaterManager.Instance.GetWaterDepth(checkPos.x, checkPos.z);
+                            }
+
+                            if (waterDepth < 0.1f) 
+                            {
+                                float height = TerrainManager.Instance.GetHeight(checkPos.x, checkPos.z);
+                                float cellSize = TerrainManager.Instance.CellSize;
+                                Vector3 worldPos = new Vector3(checkPos.x * cellSize + cellSize/2, height, checkPos.z * cellSize + cellSize/2);
+                                
+                                if (NavMesh.SamplePosition(worldPos, out NavMeshHit hit, 1.0f, NavMesh.AllAreas))
+                                {
+                                    return hit.position;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return null;
         }
 
         public void MoveTo(Vector3 destination)
         {
+            StopAutoMining();
             StopAllCoroutines();
-            jobQueue.Clear(); // User command overrides all
-            if (currentJob != JobType.None)
-            {
-                 Debug.LogWarning($"[UnitController] MoveTo called while Job {currentJob} was active! Cancelling Job. Trace: {System.Environment.StackTrace}");
-            }
+            jobQueue.Clear(); 
             
-            currentJob = JobType.None;
+            activeJob = null;
             currentState = UnitState.Moving;
             agent.isStopped = false;
             agent.SetDestination(destination);
         }
 
-        // Job Queue System
-        private struct JobData
+        public void StartAutoMining(Vector3Int center, SluiceBox sluice)
         {
-            public JobType jobType;
-            public Vector3Int targetCoord;
-            public Vector3 standPosition;
-            public SluiceBox sluice;
-            public ConstructionSite site;
+            StopAutoMining(); 
+            currentState = UnitState.AutoMining;
+            autoMiner.StartMining(center, sluice);
         }
 
-        private Queue<JobData> jobQueue = new Queue<JobData>();
-
-        public void StartJob(JobType job, Vector3Int targetCoord, Vector3 standPosition, SluiceBox sluice = null, ConstructionSite site = null)
+        public void StopAutoMining()
         {
-            // Create Job Data
-            JobData newJob = new JobData
+            if (currentState == UnitState.AutoMining)
             {
-                jobType = job,
-                targetCoord = targetCoord,
-                standPosition = standPosition,
-                sluice = sluice,
-                site = site
-            };
+                autoMiner.StopMining();
+                currentState = UnitState.Idle;
+                Debug.Log("[UnitController] Auto Mining Stopped.");
+            }
+        }
 
-            // If completely Idle, start immediately. 
-            // BUT if Moving to a job, or Working, we queue.
-            // Be careful: 'Moving' could be a user command (MoveTo). 
-            // If user explicitly moves, we cleared queue in MoveTo.
-            
-            if (currentState == UnitState.Idle && currentJob == JobType.None)
+        public void SetCarryingDirt(bool val)
+        {
+            IsCarryingDirt = val;
+        }
+
+        // --- BACKWARD COMPATIBILITY WRAPPER ---
+        public void StartJob(JobType jobType, Vector3Int targetCoord, Vector3 standPosition, SluiceBox sluice = null, ConstructionSite site = null)
+        {
+            IJob job = null;
+            switch(jobType)
             {
-                ExecuteJob(newJob);
+                case JobType.Mine: job = new MineJob(targetCoord, standPosition); break;
+                case JobType.DropDirt: job = new DropDirtJob(targetCoord, standPosition); break;
+                case JobType.FeedSluice: job = new FeedSluiceJob(targetCoord, standPosition, sluice); break;
+                case JobType.Build: job = new BuildJob(targetCoord, standPosition, site); break;
+                case JobType.CleanSluice: job = new CleanSluiceJob(targetCoord, standPosition, sluice); break;
+            }
+
+            if (job != null) StartJob(job);
+        }
+
+        // --- NEW JOB SYSTEM ---
+        public void StartJob(IJob job)
+        {
+            if ((currentState == UnitState.Idle || currentState == UnitState.AutoMining) && activeJob == null)
+            {
+                ExecuteJob(job);
             }
             else
             {
-                jobQueue.Enqueue(newJob);
-                Debug.Log($"[UnitController] Job Queued: {job}. Queue Size: {jobQueue.Count}");
+                jobQueue.Enqueue(job);
+                Debug.Log($"[UnitController] Job Queued: {job.GetType().Name}. Queue Size: {jobQueue.Count}");
             }
         }
 
-        private void ExecuteJob(JobData job)
+        private void ExecuteJob(IJob job)
         {
             StopAllCoroutines();
-            currentJob = job.jobType;
-            jobTargetCoord = job.targetCoord;
-            targetSluice = job.sluice;
-            targetSite = job.site;
+            activeJob = job;
             
-            Debug.Log($"Unit Starting Job: {currentJob} at {jobTargetCoord}. Moving to {job.standPosition}");
+            Debug.Log($"Unit Starting Job: {activeJob.Type} at {activeJob.TargetCoord}. Moving to {activeJob.StandPosition}");
 
-            // Move to position first
             currentState = UnitState.Moving;
+            stuckTimer = 0f;
+            lastPosition = transform.position;
             agent.isStopped = false;
             
-            if (!agent.SetDestination(job.standPosition))
+            bool pathSet = agent.SetDestination(activeJob.StandPosition);
+
+            if (!pathSet)
             {
                 Debug.LogError("Agent SetDestination Failed! Is the target on the NavMesh?");
                 currentState = UnitState.Idle;
-                CheckQueue(); // Try next if this failed
+                activeJob = null;
+                CheckQueue(); 
+            }
+            else
+            {
+                activeJob.OnEnter(this);
             }
         }
 
         private void Update()
         {
+            if (currentState == UnitState.AutoMining)
+            {
+                autoMiner.DecideNextAction();
+            }
+
             if (currentState == UnitState.Moving)
             {
-                if (agent == null || !agent.isActiveAndEnabled || !agent.isOnNavMesh) {
-                     return;
-                }
+                if (agent == null || !agent.isActiveAndEnabled || !agent.isOnNavMesh)  return;
 
                 if (!agent.pathPending)
                 {
-                    // Check 1: Distance within tolerance
                     if (agent.remainingDistance <= agent.stoppingDistance + 0.1f)
                     {
                         ForceStopAndArrive();
                         return;
                     }
 
-                    // Check 2: Agent has stopped moving (and is reasonably close)
                     if (agent.velocity.sqrMagnitude < 0.01f && agent.remainingDistance < 0.5f)
                     {
-                         Debug.Log("Arrived via Velocity Check (Stopped near target).");
                          ForceStopAndArrive();
                          return;
                     }
                 }
                 
-                // FALLBACK: Manual Geometric Distance Check
+                if (Vector3.Distance(transform.position, lastPosition) < MOVE_THRESHOLD)
+                {
+                    stuckTimer += Time.deltaTime;
+                    if (stuckTimer > STUCK_TIMEOUT)
+                    {
+                        Debug.LogWarning("[UnitController] Unit STUCK! Resetting state.");
+                        ForceStopAndArrive(true); 
+                        return;
+                    }
+                }
+                else
+                {
+                     stuckTimer = 0f;
+                     lastPosition = transform.position;
+                }
+                
+                if (!agent.pathPending && (agent.pathStatus == NavMeshPathStatus.PathPartial || agent.pathStatus == NavMeshPathStatus.PathInvalid))
+                {
+                      if (agent.remainingDistance > 2.0f)
+                     {
+                         Debug.LogError("[UnitController] Path Invalid or Partial AND far from target. Aborting Job.");
+                         ForceStopAndArrive(true);
+                         return;
+                     }
+                }
+                
                 if (Vector3.Distance(transform.position, agent.destination) <= agent.stoppingDistance + 0.2f)
                 {
-                    Debug.Log("Arrived via Manual Distance Check.");
                     ForceStopAndArrive();
+                }
+            }
+            else if (currentState == UnitState.Working && activeJob != null)
+            {
+                activeJob.Update(this);
+                if (activeJob.IsComplete())
+                {
+                    CompleteJob();
                 }
             }
         }
 
-        private void ForceStopAndArrive()
+        private void ForceStopAndArrive(bool failure = false)
         {
             if (!agent.isStopped) 
             {
                 agent.isStopped = true;
                 agent.ResetPath();
             }
-            Arrived();
+            
+            if (failure)
+            {
+                Debug.Log("[UnitController] Movement Failed/Stuck. Cancelling Job.");
+                activeJob = null;
+                currentState = currentState == UnitState.AutoMining ? UnitState.AutoMining : UnitState.Idle;
+                
+                 if (currentState == UnitState.AutoMining)
+                {
+                    autoMiner.StopMining(); // Or retry logic
+                }
+            }
+            else
+            {
+                Arrived();
+            }
         }
 
         private void Arrived()
         {
-             // Reached destination
-            if (currentJob != JobType.None)
+            if (activeJob != null)
             {
-                Debug.Log($"[UnitController] Arrived at Job Site. Starting Job {currentJob}...");
-                StartCoroutine(ExecuteJobRoutine());
+                currentState = UnitState.Working;
+                // Job continues in Update loop -> calls activeJob.Update()
             }
             else
             {
-                Debug.Log("[UnitController] Arrived. State -> Idle");
                 currentState = UnitState.Idle;
+                CheckQueue();
             }
-        }
-
-        private IEnumerator ExecuteJobRoutine()
-        {
-            currentState = UnitState.Working;
-            // Face target?
-            
-            yield return new WaitForSeconds(1.0f); // Work duration
-
-            CompleteJob();
         }
 
         private void CompleteJob()
         {
-            if (currentJob == JobType.Mine)
+            if (activeJob != null)
             {
-                // Verify tile still exists
-                if (TerrainManager.Instance.TryGetTile(jobTargetCoord, out TileType type))
-                {
-                    Debug.Log($"[UnitController] Completing Mine Job on {type} at {jobTargetCoord}");
-                    
-                    // Dig DOWN
-                    Vector3 targetPos = new Vector3(jobTargetCoord.x * TerrainManager.Instance.CellSize, 0, jobTargetCoord.z * TerrainManager.Instance.CellSize);
-                    
-                    TerrainManager.Instance.ModifyHeight(targetPos, -0.5f); // Dig down 0.5m
-                    
-                    // Pick up Dirt
-                    IsCarryingDirt = true;
-                    Debug.Log("[UnitController] Job Complete: Mined Dirt. Holding Dirt.");
-                }
-                else
-                {
-                    Debug.LogError("[UnitController] Job Failed: Tile no longer exists or is invalid!");
-                }
-            }
-            else if (currentJob == JobType.DropDirt)
-            {
-                 // Drop Dirt on Terrain -> Raises Terrain
-                float cellSize = TerrainManager.Instance.CellSize;
-                Vector3 targetPos = new Vector3(jobTargetCoord.x * cellSize, 0, jobTargetCoord.z * cellSize);
-                
-                TerrainManager.Instance.ModifyHeight(targetPos, 0.5f); // Raise 0.5m
-                
-                IsCarryingDirt = false;
-                Debug.Log("[UnitController] Job Complete: Dropped Dirt on Terrain.");
-            }
-            else if (currentJob == JobType.FeedSluice)
-            {
-                // Feed Sluice -> No Terrain Change
-                if (targetSluice != null)
-                {
-                    targetSluice.AddDirt(0.5f); // Add dirt volume
-                    IsCarryingDirt = false;
-                    Debug.Log("[UnitController] Job Complete: Fed Sluice Box.");
-                }
-                else
-                {
-                    Debug.LogError("Target Sluice is null!");
-                }
-            }
-            else if (currentJob == JobType.Build)
-            {
-                if (targetSite != null)
-                {
-                    targetSite.CompleteConstruction();
-                    Debug.Log("[UnitController] Job Complete: Built Structure.");
-                }
-                else
-                {
-                    Debug.LogError("Target ConstructionSite is null!");
-                }
+                activeJob.OnExit(this);
+                Debug.Log($"[UnitController] Completed Job: {activeJob.Type}");
+                activeJob = null;
             }
 
-            currentJob = JobType.None;
-            currentState = UnitState.Idle;
-            
+            // Fix: Check if Auto Miner is active to resume loop
+            if (autoMiner != null && autoMiner.IsActive)
+            {
+                currentState = UnitState.AutoMining;
+            }
+            else
+            {
+                currentState = UnitState.Idle;
+            }
+             
+            // If AutoMining, next Update will trigger autoMiner.DecideNextAction() because local activeJob is null
+            // Check Queue first (Manual commands override auto mining usually, but here we queue strictly)
             CheckQueue();
         }
 
@@ -287,8 +361,7 @@ namespace ClaimTycoon.Controllers
         {
             if (jobQueue.Count > 0)
             {
-                JobData nextJob = jobQueue.Dequeue();
-                Debug.Log($"[UnitController] Dequeueing Job: {nextJob.jobType}. Remaining: {jobQueue.Count}");
+                IJob nextJob = jobQueue.Dequeue();
                 ExecuteJob(nextJob);
             }
         }

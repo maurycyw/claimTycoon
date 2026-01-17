@@ -5,6 +5,7 @@ using ClaimTycoon.Systems.Terrain;
 using ClaimTycoon.Systems.Persistence;
 using ClaimTycoon.Controllers;
 using ClaimTycoon.Systems.Buildings;
+using ClaimTycoon.Systems.Units.Jobs;
 
 namespace ClaimTycoon.Managers
 {
@@ -222,7 +223,7 @@ namespace ClaimTycoon.Managers
             if (worker == null)
             {
                 // Try to find any unit (assuming there's one main player for now)
-                worker = FindObjectOfType<UnitController>();
+                worker = FindFirstObjectByType<UnitController>();
             }
 
             if (worker != null)
@@ -236,6 +237,8 @@ namespace ClaimTycoon.Managers
                     coord + new Vector3Int(0, 0, 1), 
                     coord + new Vector3Int(0, 0, -1) 
                 };
+
+
 
                 foreach(var n in neighbors)
                 {
@@ -252,7 +255,7 @@ namespace ClaimTycoon.Managers
                     }
                 }
 
-                worker.StartJob(JobType.Build, coord, standPos, null, siteComp);
+                worker.StartJob(new BuildJob(coord, standPos, siteComp));
             }
 
             StopPlacement();

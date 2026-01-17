@@ -24,10 +24,14 @@ namespace ClaimTycoon.Systems.Terrain
         public float CellSize => cellSize;
 
         [SerializeField] private float initialHeight = 2.0f;
-        [SerializeField] private float bedrockHeight = -0.5f;
+        [SerializeField] private float bedrockBaseHeight = -0.5f; // Renamed for clarity, acts as base
+        [SerializeField] private float bedrockNoiseScale = 0.1f;
+        [SerializeField] private float bedrockNoiseAmplitude = 0.5f;
 
         private float[,] heightMap;
+        private float[,] bedrockMap;
         private Mesh terrainMesh;
+        private Mesh bedrockMesh; // Added bedrock mesh
         private MeshCollider meshCollider;
         private NavMeshSurface navMeshSurface;
 
@@ -54,37 +58,55 @@ namespace ClaimTycoon.Systems.Terrain
         private void GenerateInitialTerrain()
         {
             heightMap = new float[gridSize.x, gridSize.y];
+            bedrockMap = new float[gridSize.x, gridSize.y];
 
-            // Initialize Heightmap 
+            float noiseOffset = Random.Range(0f, 100f);
+
+            // Initialize Heightmap and Bedrock Map
             for (int x = 0; x < gridSize.x; x++)
             {
                 for (int z = 0; z < gridSize.y; z++)
                 {
+                    // Generate Bedrock Height using Perlin Noise
+                    float noise = Mathf.PerlinNoise((x * bedrockNoiseScale) + noiseOffset, (z * bedrockNoiseScale) + noiseOffset);
+                    bedrockMap[x, z] = bedrockBaseHeight + (noise * bedrockNoiseAmplitude);
                     // River Channel: Wider and flatter
                     // Center roughly at x=6 to x=8
                     
-                    if (x >= 3 && x <= 11) // Overall Valley
+                    // River Channel with Curvature
+                    float curveOffset = Mathf.Sin(z * 0.1f) * 3f; // Amplitude 3, Freq 0.1
+                    float centerX = 25f + curveOffset; // Center of map (50/2 = 25)
+                    
+                    // Define River Widths
+                    float riverBedHalfWidth = 2.0f; // Flat bottom radius
+                    float innerBankWidth = 1.0f;
+                    float middleBankWidth = 1.0f;
+                    float outerBankWidth = 1.0f;
+                    
+                    float distFromCenter = Mathf.Abs(x - centerX);
+                    
+                    if (distFromCenter <= riverBedHalfWidth + innerBankWidth + middleBankWidth + outerBankWidth) // Total Valley Width
                     {
                         float h = 0f;
                         
-                        if (x >= 6 && x <= 8) 
+                        if (distFromCenter <= riverBedHalfWidth) 
                         {
                             // River Bed (Flat Bottom)
                             h = 0.0f; 
                         }
-                        else if (x == 5 || x == 9)
+                        else if (distFromCenter <= riverBedHalfWidth + innerBankWidth)
                         {
                             // Inner Banks
                             h = 0.5f;
                         }
-                        else if (x == 4 || x == 10)
+                        else if (distFromCenter <= riverBedHalfWidth + innerBankWidth + middleBankWidth)
                         {
                             // Middle Banks
                             h = 1.0f;
                         }
-                        else if (x == 3 || x == 11)
+                        else 
                         {
-                            // Outer Banks (Start of slope)
+                            // Outer Banks
                             h = 1.5f;
                         }
                         
@@ -92,8 +114,9 @@ namespace ClaimTycoon.Systems.Terrain
                     }
                     else
                     {
-                        heightMap[x, z] = initialHeight; // 2.0f
+                         heightMap[x, z] = initialHeight;
                     }
+
                 }
             }
 
@@ -109,30 +132,15 @@ namespace ClaimTycoon.Systems.Terrain
             return 0f;
         }
 
-        private void CreateBedrockVisual()
+        public float GetBedrockHeight(int x, int z)
         {
-            GameObject bedrock = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            bedrock.name = "Bedrock";
-            bedrock.transform.SetParent(this.transform);
-            
-            // Scale: X = Width * CellSize, Y = Thickness, Z = Depth * CellSize
-            // Position: Center of grid, at bedrock Height - Thickness/2
-            float width = gridSize.x * cellSize;
-            float depth = gridSize.y * cellSize;
-            float thickness = 2.0f; 
-
-            bedrock.transform.localScale = new Vector3(width, thickness, depth);
-            bedrock.transform.position = new Vector3(width / 2f, bedrockHeight - (thickness / 2f), depth / 2f);
-
-            // Optional: Assign material if available, or just leave gray
-             if (GetComponent<MeshRenderer>() != null)
-             {
-                 Material mat = GetComponent<MeshRenderer>().sharedMaterial;
-                 bedrock.GetComponent<Renderer>().material = mat;
-                 // Darken it
-                 bedrock.GetComponent<Renderer>().material.color = Color.gray; 
-             }
+             if (x >= 0 && x < gridSize.x && z >= 0 && z < gridSize.y)
+            {
+                return bedrockMap[x, z];
+            }
+            return bedrockBaseHeight;
         }
+
 
         private void UpdateMesh()
         {
@@ -141,11 +149,34 @@ namespace ClaimTycoon.Systems.Terrain
                 terrainMesh = MeshGenerator.GenerateTerrainMesh(heightMap, cellSize);
                 GetComponent<MeshFilter>().mesh = terrainMesh;
                 meshCollider.sharedMesh = terrainMesh; // Important for Raycast
+                
+                // Create Bedrock Visual Object if not exists
+                Transform bedrockTrans = transform.Find("BedrockMeshDetails");
+                GameObject bedrockObj;
+                if (bedrockTrans == null) {
+                    bedrockObj = new GameObject("BedrockMeshDetails");
+                    bedrockObj.transform.SetParent(transform);
+                    bedrockObj.transform.localPosition = Vector3.zero;
+                    bedrockObj.AddComponent<MeshFilter>();
+                    bedrockObj.AddComponent<MeshRenderer>().material = GetComponent<MeshRenderer>().sharedMaterial;
+                    bedrockObj.GetComponent<Renderer>().material.color = Color.gray;
+                } else {
+                    bedrockObj = bedrockTrans.gameObject;
+                }
+                
+                // Generate Bedrock Mesh (Similar to Terrain but for Bedrock Map)
+                bedrockMesh = MeshGenerator.GenerateTerrainMesh(bedrockMap, cellSize, false);
+                bedrockObj.GetComponent<MeshFilter>().mesh = bedrockMesh;
+                // No collider needed for bedrock logic usually, unless we want to click it?
             }
             else
             {
                 MeshGenerator.UpdateMeshVertices(terrainMesh, heightMap, cellSize);
                 meshCollider.sharedMesh = terrainMesh;
+                
+                // Update Bedrock Mesh (It shouldn't change often but for safety)
+                if (bedrockMesh != null)
+                     MeshGenerator.UpdateMeshVertices(bedrockMesh, bedrockMap, cellSize, false);
             }
             
             // Rebuild NavMesh
@@ -162,9 +193,10 @@ namespace ClaimTycoon.Systems.Terrain
             if (x >= 0 && x < gridSize.x && z >= 0 && z < gridSize.y)
             {
                 // Prevent digging below bedrock
-                if (heightMap[x, z] + amount < bedrockHeight)
+                float currentBedrock = bedrockMap[x, z];
+                if (heightMap[x, z] + amount < currentBedrock)
                 {
-                    amount = bedrockHeight - heightMap[x, z]; // Clamp
+                    amount = currentBedrock - heightMap[x, z]; // Clamp
                     if (Mathf.Abs(amount) < 0.01f) return; // Hit bottom
                 }
 
@@ -186,8 +218,8 @@ namespace ClaimTycoon.Systems.Terrain
              if (x >= 0 && x < gridSize.x && z >= 0 && z < gridSize.y)
             {
                 float newHeight = heightMap[x, z] + amount;
-                // Clamp Main HeightMap check handles it? No, we modify directly here.
-                if (newHeight < bedrockHeight) newHeight = bedrockHeight;
+                float localBedrock = bedrockMap[x, z];
+                if (newHeight < localBedrock) newHeight = localBedrock;
                 
                 heightMap[x, z] = newHeight;
             }
@@ -207,7 +239,7 @@ namespace ClaimTycoon.Systems.Terrain
             if (coord.x >= 0 && coord.x < gridSize.x && coord.z >= 0 && coord.z < gridSize.y)
             {
                 // If we are at or near bedrock, report Bedrock
-                if (heightMap[coord.x, coord.z] <= bedrockHeight + 0.1f)
+                if (heightMap[coord.x, coord.z] <= bedrockMap[coord.x, coord.z] + 0.1f)
                 {
                     type = TileType.Bedrock;
                 }

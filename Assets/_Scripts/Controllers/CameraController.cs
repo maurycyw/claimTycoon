@@ -17,6 +17,7 @@ namespace ClaimTycoon.Controllers
 
         [Header("Rotation Settings")]
         [SerializeField] private float rotationSpeed = 100f;
+        [SerializeField] private LayerMask groundLayer;
 
         private void Update()
         {
@@ -74,13 +75,22 @@ namespace ClaimTycoon.Controllers
         {
             if (Keyboard.current == null) return;
 
-            if (Keyboard.current.qKey.isPressed)
+            float rotateDir = 0f;
+            if (Keyboard.current.qKey.isPressed) rotateDir = -1f;
+            if (Keyboard.current.eKey.isPressed) rotateDir = 1f;
+
+            if (rotateDir != 0f)
             {
-                transform.Rotate(Vector3.up, -rotationSpeed * Time.deltaTime, Space.World);
-            }
-            if (Keyboard.current.eKey.isPressed)
-            {
-                transform.Rotate(Vector3.up, rotationSpeed * Time.deltaTime, Space.World);
+                // Orbit around pivot if hitting ground, else rotate self
+                Ray ray = new Ray(transform.position, transform.forward);
+                if (Physics.Raycast(ray, out RaycastHit hit, 300f, groundLayer))
+                {
+                     transform.RotateAround(hit.point, Vector3.up, rotateDir * rotationSpeed * Time.deltaTime);
+                }
+                else
+                {
+                     transform.Rotate(Vector3.up, rotateDir * rotationSpeed * Time.deltaTime, Space.World);
+                }
             }
         }
 
@@ -89,16 +99,84 @@ namespace ClaimTycoon.Controllers
             if (Mouse.current == null) return;
             
             float scroll = Mouse.current.scroll.ReadValue().y;
-            // Scroll usually returns large values like 120, normalize it a bit
-            // or just adjust zoom speed. The old Input.GetAxis returned smaller values.
             scroll *= 0.01f; 
 
-            Vector3 pos = transform.position;
+            if (Mathf.Abs(scroll) > 0.001f)
+            {
+                Vector3 moveDir = transform.forward * scroll * scrollSpeed * 100f * Time.deltaTime;
+                Vector3 newPos = transform.position + moveDir;
 
-            pos.y -= scroll * scrollSpeed * 100f * Time.deltaTime;
-            pos.y = Mathf.Clamp(pos.y, minY, maxY);
+                // Clamp based on Height (Y)
+                if (newPos.y < minY)
+                {
+                    // Clamp to MinY
+                    // We need to back off along the vector until Y is at least MinY
+                    // Or just stop moving.
+                    // Simple clamp: just don't apply if it goes too low.
+                    // Better: Project to boundary.
+                    newPos = transform.position; // Cancel move
+                }
+                else if (newPos.y > maxY)
+                {
+                    newPos = transform.position; // Cancel move
+                }
 
-            transform.position = pos;
+                transform.position = newPos;
+            }
+        }
+
+        public void FocusOn(Vector3 targetData)
+        {
+            // We want to position the camera such that 'targetData' is in the center.
+            // Current rotation is preserved.
+            // We back up from the target by some distance along the inverse forward vector.
+            
+            // Calculate current distance from ground/pivot (or just pick a default zoom)
+            // Let's assume we want to maintain the current height Y relative to the target?
+            // Or just set a fixed height?
+            
+            float targetHeight = 20f; // Default nice viewing height
+            if (transform.position.y > minY && transform.position.y < maxY)
+            {
+                targetHeight = transform.position.y;
+            }
+
+            // Raycast strategy:
+            // Forward vector points at ground.
+            // We want (CameraPos + Forward * d) = TargetPos
+            // So CameraPos = TargetPos - Forward * d.
+            
+            // We need to find 'd' such that CameraPos.y = targetHeight.
+            // CameraPos.y = TargetPos.y - Forward.y * d
+            // d = (TargetPos.y - CameraPos.y) / Forward.y  <-- Wait, we want to SET CameraPos.y
+            // Let's use specific height.
+            
+            // Simply:
+            // 1. Get Forward vector.
+            Vector3 forward = transform.forward;
+            
+            // 2. We want Camera.y = targetHeight.
+            // 3. We want the ray from Camera along Forward to hit Target (at y=0 usually, or Target.y).
+            // Let's assume we look at Target.y.
+            
+            if (Mathf.Abs(forward.y) < 0.001f) return; // Looking parallel to horizon, can't focus down.
+
+            float heightDiff = targetHeight - targetData.y;
+            // forward.y is typically negative (looking down).
+            // We want to go BACKWARDS (Negative Forward) from Target.
+            // T = C + F * dist
+            // C = T - F * dist
+            // C.y = T.y - F.y * dist
+            // targetHeight = T.y - F.y * dist
+            // F.y * dist = T.y - targetHeight
+            // dist = (T.y - targetHeight) / F.y
+            
+            float dist = (targetData.y - targetHeight) / forward.y;
+            
+            Vector3 newPos = targetData - forward * dist;
+            transform.position = newPos;
+            
+            Debug.Log($"[CameraController] Focused on {targetData}. New Pos: {newPos}");
         }
     }
 }
