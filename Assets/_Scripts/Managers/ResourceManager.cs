@@ -1,5 +1,7 @@
-using System;
 using UnityEngine;
+using System;
+using System.Collections.Generic;
+using ClaimTycoon.Systems.Inventories; // Add Namespace
 
 namespace ClaimTycoon.Managers
 {
@@ -10,32 +12,38 @@ namespace ClaimTycoon.Managers
         public float GoldAmount { get; private set; }
         public float MoneyAmount { get; private set; }
 
-        // Events for UI updates
+        public Inventory PlayerInventory { get; private set; } // The Inventory Object
+
+        // Events
         public event Action<float> OnGoldChanged;
         public event Action<float> OnMoneyChanged;
 
         [Header("Settings")]
-        [SerializeField] private float goldPricePerUnit = 50f; // $50 per 1.0 gold
+        [SerializeField] private float goldPricePerUnit = 50f; 
 
         private void Awake()
         {
             if (Instance == null)
             {
                 Instance = this;
+                PlayerInventory = new Inventory(); // Create the Object
             }
             else
             {
                 Destroy(gameObject);
             }
         }
-
+        
+        // ... (Start, AddGold, AddMoney, SellGold, SetResources unchanged) ...
+        
         private void Start()
         {
-            // Initialize UI
             OnGoldChanged?.Invoke(GoldAmount);
             OnMoneyChanged?.Invoke(MoneyAmount);
+            // Inventory triggers its own events if needed, or we expose them here.
         }
 
+        // ... (Rest of existing methods)
         public void AddGold(float amount)
         {
             GoldAmount += amount;
@@ -47,19 +55,24 @@ namespace ClaimTycoon.Managers
             MoneyAmount += amount;
             OnMoneyChanged?.Invoke(MoneyAmount);
         }
-
+        
         public void SellGold()
         {
-            if (GoldAmount > 0)
+             if (GoldAmount > 0)
             {
                 float revenue = GoldAmount * goldPricePerUnit;
                 AddMoney(revenue);
-                
                 GoldAmount = 0;
                 OnGoldChanged?.Invoke(GoldAmount);
-                
-                Debug.Log($"Sold gold for ${revenue}");
             }
+        }
+        
+        public void SetResources(float money, float gold)
+        {
+             MoneyAmount = money;
+            GoldAmount = gold;
+            OnMoneyChanged?.Invoke(MoneyAmount);
+            OnGoldChanged?.Invoke(GoldAmount);
         }
     }
 }

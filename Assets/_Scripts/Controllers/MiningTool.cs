@@ -32,32 +32,38 @@ namespace ClaimTycoon.Controllers
             if (Mouse.current == null) return;
             Vector2 mousePos = Mouse.current.position.ReadValue();
             Ray ray = mainCamera.ScreenPointToRay(mousePos);
+            
+            // Debug Draw
+            Debug.DrawRay(ray.origin, ray.direction * range, Color.red, 1.0f);
+
             if (Physics.Raycast(ray, out RaycastHit hit, range, terrainLayer))
             {
+                Debug.Log($"Raycast Hit: {hit.collider.name} at {hit.point}");
+
                 // Simple logic: if we hit a collider that is a child of TerrainManager or just a tile
                 // We could put a script on the tile, or just user coordinate math.
                 // For this prototype, let's assume tiles are positioned exactly at integer coordinates.
                 
-                Vector3 hitPos = hit.transform.position;
-                Vector3Int coord = new Vector3Int(Mathf.RoundToInt(hitPos.x), Mathf.RoundToInt(hitPos.y), Mathf.RoundToInt(hitPos.z));
+                Vector3 hitPos = hit.point; // Use exact point
+                
+                // Vector3Int coord = new Vector3Int(Mathf.RoundToInt(hitPos.x), Mathf.RoundToInt(hitPos.y), Mathf.RoundToInt(hitPos.z));
 
                 if (TerrainManager.Instance != null)
                 {
-                    // Check if it's the correct tile
-                    if (TerrainManager.Instance.TryGetTile(coord, out TileType type))
-                    {
-                        if (type == TileType.Dirt)
-                        {
-                            MineTile(coord);
-                        }
-                    }
+                    Debug.Log("Mining Tool: Calling ModifyHeight");
+                    // Just Dig at the point
+                    TerrainManager.Instance.ModifyHeight(hit.point, -0.5f);
                 }
+            }
+            else
+            {
+                // Debug.Log("Raycast Missed Terrain");
             }
         }
 
-        private void MineTile(Vector3Int coord)
+        private void MineTile(Vector3 hitPoint)
         {
-            TerrainManager.Instance.RemoveTile(coord);
+            TerrainManager.Instance.ModifyHeight(hitPoint, -0.5f);
             
             // Chance to find gold
             if (Random.value < miningChance)

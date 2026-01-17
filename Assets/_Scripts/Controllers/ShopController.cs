@@ -8,8 +8,19 @@ namespace ClaimTycoon.Controllers
         [Header("Shop Settings")]
         [SerializeField] private GameObject shopPanel;
         [SerializeField] private GameObject sluiceBoxPrefab;
-        [SerializeField] private int sluiceBoxCost = 100;
+        [SerializeField] private int sluiceBoxCost = 0; // Free for now
 
+
+
+        private void Start()
+        {
+            // Ensure shop is closed by default
+            if (shopPanel != null)
+            {
+                shopPanel.SetActive(false);
+            }
+        }
+        
         public void ToggleShop()
         {
             if (shopPanel != null)

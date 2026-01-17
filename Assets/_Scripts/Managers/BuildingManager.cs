@@ -1,6 +1,10 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using System.Collections.Generic;
 using ClaimTycoon.Systems.Terrain;
+using ClaimTycoon.Systems.Persistence;
+using ClaimTycoon.Controllers;
+using ClaimTycoon.Systems.Buildings;
 
 namespace ClaimTycoon.Managers
 {
@@ -13,14 +17,20 @@ namespace ClaimTycoon.Managers
         [SerializeField] private Material ghostMaterial;
         [SerializeField] private Material errorMaterial;
 
+        // Prefab references for loading
+        [SerializeField] private GameObject sluiceBoxPrefab; 
+        // If we have more buildings, use a List<GameObject> and ID lookup
+
         private GameObject buildingPrefab;
-        private GameObject ghostObject; // The visual ghost
+        private GameObject ghostObject;
         private int currentCost;
         private bool isPlacing = false;
+        public bool IsPlacing => isPlacing;
         private Camera mainCamera;
-
-        // Simple check if user is placing SluiceBox specifically
         private bool isPlacingSluiceBox = false;
+
+        // Track placed buildings
+        private List<BuildingData> placedBuildings = new List<BuildingData>();
 
         private void Awake()
         {
@@ -41,18 +51,35 @@ namespace ClaimTycoon.Managers
                 return;
             }
 
+            StartPlacementInternal(prefab, cost, isSluice);
+        }
+
+        public void StartPlacementById(string buildingId)
+        {
+            // Simple lookup for now
+            if (buildingId == "SluiceBox")
+            {
+                // Sluice Box costs 0 if from inventory? 
+                // Logic says if isSluice=true, we check inventory instead of money.
+                StartPlacementInternal(sluiceBoxPrefab, 0, true);
+            }
+            else
+            {
+                Debug.LogWarning($"Unknown building ID for placement: {buildingId}");
+            }
+        }
+
+        private void StartPlacementInternal(GameObject prefab, int cost, bool isSluice)
+        {
             buildingPrefab = prefab;
             currentCost = cost;
             isPlacingSluiceBox = isSluice;
             isPlacing = true;
             Debug.Log("Entered Placement Mode");
             
-            // Create ghost
             if (ghostObject != null) Destroy(ghostObject);
             ghostObject = Instantiate(buildingPrefab);
             
-            // Strip scripts and colliders from ghost so it doesn't interfere
-            // Or just disable them if complex. For simple cubes, removing BoxCollider is enough.
             foreach (var c in ghostObject.GetComponentsInChildren<Collider>()) Destroy(c);
             foreach (var m in ghostObject.GetComponentsInChildren<MonoBehaviour>()) Destroy(m);
         }
@@ -61,64 +88,62 @@ namespace ClaimTycoon.Managers
         {
             if (!isPlacing) return;
 
-            // Right click to cancel
             if (Mouse.current != null && Mouse.current.rightButton.wasPressedThisFrame)
             {
                 StopPlacement();
                 return;
             }
-
-            // Click to confirm - Moved inside TryPlaceBuilding to ensure validity check first
-            // if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame)
-            // {
-            //    TryPlaceBuilding();
-            // }
             
-            // Always run Raycast to update Ghost position
             TryPlaceBuilding();
         }
 
         private void TryPlaceBuilding()
         {
-            // Raycast to find tile
              if (Mouse.current == null) return;
             Vector2 mousePos = Mouse.current.position.ReadValue();
             Ray ray = mainCamera.ScreenPointToRay(mousePos);
 
             if (Physics.Raycast(ray, out RaycastHit hit, 1000f, terrainLayer))
             {
-                Vector3 hitPos = hit.transform.position;
-                Vector3Int coord = new Vector3Int(Mathf.RoundToInt(hitPos.x), Mathf.RoundToInt(hitPos.y), Mathf.RoundToInt(hitPos.z));
+                Vector3 hitPos = hit.point;
+                float cellSize = TerrainManager.Instance.CellSize;
+                
+                int gridX = Mathf.RoundToInt(hitPos.x / cellSize);
+                int gridZ = Mathf.RoundToInt(hitPos.z / cellSize);
 
-                // Validation
+                Vector3Int coord = new Vector3Int(gridX, 0, gridZ);
+
                 bool isValid = true;
 
-                // 1. Must be Dirt or empty space above bedrock? 
-                // For now, let's say we PLACE it on top of a tile, so we check if the tile exists
                 if (!TerrainManager.Instance.TryGetTile(coord, out TileType type))
                 {
                     isValid = false; 
                 }
 
-                if (type == TileType.Water) isValid = false; // Cannot place on water
+                if (type == TileType.Water) isValid = false;
 
-                // 2. Water Adjacency Check
                 if (isPlacingSluiceBox)
                 {
-                    if (!TerrainManager.Instance.IsAdjacentToWater(coord))
+                    // Strict Water Check
+                    float terrainHeight = TerrainManager.Instance.GetHeight(coord.x, coord.z);
+                    float waterLevel = 1.8f; 
+                    float minDepth = 0.1f;
+
+                    if ((waterLevel - terrainHeight) < minDepth)
                     {
-                        // Debug.Log("Must be placed next to water!"); // Too spammy in Update
                         isValid = false;
+                        // Optional: Debug log why invalid
+                        // Debug.Log($"Invalid Sluice Placement: Terrain {terrainHeight} is too high for water {waterLevel}");
                     }
                 }
 
-                // Update Ghost Position
                 if (ghostObject != null)
                 {
-                    Vector3 ghostPos = new Vector3(coord.x, coord.y + 1, coord.z); // +1 to sit on top
+                    // Snap to grid but get Height from Mesh
+                    float yHeight = TerrainManager.Instance.GetHeight(coord.x, coord.z);
+                    Vector3 ghostPos = new Vector3(coord.x * cellSize, yHeight, coord.z * cellSize); 
                     ghostObject.transform.position = ghostPos;
 
-                    // Update Ghost Material (Visual Feedback)
                     Renderer[] renderers = ghostObject.GetComponentsInChildren<Renderer>();
                     Material matToUse = isValid ? ghostMaterial : errorMaterial;
                     
@@ -128,7 +153,6 @@ namespace ClaimTycoon.Managers
                     }
                 }
 
-                // Click to confirm
                 if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame && isValid)
                 {
                     Place(coord);
@@ -138,19 +162,99 @@ namespace ClaimTycoon.Managers
 
         private void Place(Vector3Int coord)
         {
-            // Deduct money
-            ResourceManager.Instance.AddMoney(-currentCost);
+            // Inventory Check
+            if (isPlacingSluiceBox)
+            {
+                if (!ResourceManager.Instance.PlayerInventory.RemoveItem("SluiceBox", 1))
+                {
+                    Debug.LogWarning("Cannot place Sluice Box: No Inventory!");
+                    StopPlacement();
+                    return;
+                }
+            }
+            else
+            {
+                ResourceManager.Instance.AddMoney(-currentCost);
+            }
 
-            // Spawn object
-            // Adjust y position to sit ON TOP of the tile if the tile is at y=0
-            Vector3 spawnPos = new Vector3(coord.x, coord.y + 1, coord.z); // +1 assuming tile is height 1
+            float cellSize = TerrainManager.Instance.CellSize;
+            float yHeight = TerrainManager.Instance.GetHeight(coord.x, coord.z);
+            Vector3 spawnPos = new Vector3(coord.x * cellSize, yHeight, coord.z * cellSize);
             
-            // Or if we clicked the top face, fit.point might be better. 
-            // For blocky grid, coord + 1 up is usually safe for "sitting on top".
+            // SPAWN CONSTRUCTION SITE INSTEAD OF PREFAB
+            // We need a visual for the site. For now, use the Ghost Prefab (Sluice) but with ConstructionSite component?
+            // Or instantiate a "Site" prefab. 
+            // Quickest Prototype: Instantiate the SluicePrefab, but disable SluiceBox script, add ConstructionSite.
             
-            Instantiate(buildingPrefab, spawnPos, Quaternion.identity);
+            GameObject siteObj = new GameObject("ConstructionSite_" + buildingPrefab.name);
+            siteObj.transform.position = spawnPos;
+            
+            // Add Visual (Ghost of the building)
+            GameObject visual = Instantiate(buildingPrefab, siteObj.transform);
+            visual.transform.localPosition = Vector3.zero;
+            visual.transform.localRotation = Quaternion.identity;
+            
+            // Strip logic and Apply Ghost Material
+            foreach (var c in visual.GetComponentsInChildren<Collider>()) Destroy(c);
+            foreach (var m in visual.GetComponentsInChildren<MonoBehaviour>()) Destroy(m);
+            foreach (var r in visual.GetComponentsInChildren<Renderer>())
+            {
+                if (ghostMaterial != null) r.material = ghostMaterial;
+            }
+            
+            ConstructionSite siteComp = siteObj.AddComponent<ConstructionSite>();
+            siteComp.SetResultPrefab(buildingPrefab);
 
-            Debug.Log($"Placed {buildingPrefab.name} at {coord}");
+            // Register SITE as building? 
+            TerrainManager.Instance.RegisterBuilding(coord, siteObj);
+
+            // TRACK DATA
+            BuildingData data = new BuildingData();
+            data.buildingID = isPlacingSluiceBox ? "SluiceBox" : "Unknown"; 
+            data.position = spawnPos;
+            data.gridCoord = coord;
+            placedBuildings.Add(data);
+
+            Debug.Log($"Placed Construction Site for {buildingPrefab.name} at {coord}");
+            
+            // Auto-Assign Job if Unit Selected OR Find Main Player
+            UnitController worker = SelectionManager.Instance.SelectedUnit;
+            if (worker == null)
+            {
+                // Try to find any unit (assuming there's one main player for now)
+                worker = FindObjectOfType<UnitController>();
+            }
+
+            if (worker != null)
+            {
+                // Calculate Stand Position (Neighboring Tile)
+                Vector3 standPos = spawnPos; // Default fall back
+                Vector3Int[] neighbors = new Vector3Int[] 
+                { 
+                    coord + new Vector3Int(1, 0, 0), 
+                    coord + new Vector3Int(-1, 0, 0), 
+                    coord + new Vector3Int(0, 0, 1), 
+                    coord + new Vector3Int(0, 0, -1) 
+                };
+
+                foreach(var n in neighbors)
+                {
+                    // Check if walkable (Simple check: Is Dirt? Not Water?)
+                    // Assuming TerrainManager.Instance.IsTileOccupied(n) check might be good too
+                    if (TerrainManager.Instance.TryGetTile(n, out TileType type))
+                    {
+                        if (type != TileType.Water && !TerrainManager.Instance.IsTileOccupied(n))
+                        {
+                            float h = TerrainManager.Instance.GetHeight(n.x, n.z);
+                            standPos = new Vector3(n.x * cellSize, h, n.z * cellSize);
+                            break; // Found one
+                        }
+                    }
+                }
+
+                worker.StartJob(JobType.Build, coord, standPos, null, siteComp);
+            }
+
             StopPlacement();
         }
 
@@ -159,6 +263,31 @@ namespace ClaimTycoon.Managers
             isPlacing = false;
             buildingPrefab = null;
             if (ghostObject != null) Destroy(ghostObject);
+        }
+
+        // SAVE/LOAD METHODS
+        public List<BuildingData> GetPlacedBuildings() => placedBuildings;
+
+        public void RestoreBuildings(List<BuildingData> loadedBuildings)
+        {
+            // Clear existing logic if needed? For now we assume fresh load or just adding to it.
+            // Ideally we Destroy all current buildings first.
+            // But we don't have a list of GameObject references easily unless we stored them.
+            // TerrainManager has occupiedTiles, might need to clear that too.
+            
+            // For prototype: Just spawn the loaded ones.
+            foreach (var b in loadedBuildings)
+            {
+                GameObject prefab = null;
+                if (b.buildingID == "SluiceBox") prefab = sluiceBoxPrefab;
+
+                if (prefab != null)
+                {
+                    GameObject obj = Instantiate(prefab, b.position, Quaternion.identity);
+                    TerrainManager.Instance.RegisterBuilding(b.gridCoord, obj);
+                    placedBuildings.Add(b);
+                }
+            }
         }
     }
 }
