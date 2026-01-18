@@ -13,6 +13,7 @@ namespace ClaimTycoon.Systems.Terrain
         [SerializeField] private float minWaterHeight = 0.01f;
         [SerializeField] private Material waterMaterial; // explicitly assign here
         [SerializeField] private int preWarmIterations = 500;
+        [SerializeField] private int meshSubdivisions = 4; // Increased default for smoothness
         
         [SerializeField] private float uvScale = 0.1f;
         [SerializeField] private Vector2 waterScrollVelocity = new Vector2(0, -0.5f);
@@ -33,9 +34,9 @@ namespace ClaimTycoon.Systems.Terrain
         private ParticleSystem foamParticleSystem;
 
         // Reusable Lists to avoid GC
-        private List<Vector3> verts = new List<Vector3>(4000);
-        private List<int> tris = new List<int>(6000);
-        private List<Vector2> uvs = new List<Vector2>(4000);
+        private List<Vector3> verts = new List<Vector3>(160000);
+        private List<int> tris = new List<int>(240000);
+        private List<Vector2> uvs = new List<Vector2>(160000);
 
         private TerrainManager terrainManagerCache;
 
@@ -360,40 +361,110 @@ namespace ClaimTycoon.Systems.Terrain
             // Local ref for speed
             float[,] map = waterMapRead;
 
+            // Helper for interpolation
+            float GetInterp(float[,] arr, float x, float z, int w, int h)
+            {
+                int x0 = Mathf.FloorToInt(x);
+                int z0 = Mathf.FloorToInt(z);
+                int x1 = Mathf.Min(x0 + 1, w - 1);
+                int z1 = Mathf.Min(z0 + 1, h - 1);
+
+                float tx = x - x0;
+                float tz = z - z0;
+
+                float v00 = arr[x0, z0];
+                float v10 = arr[x1, z0];
+                float v01 = arr[x0, z1];
+                float v11 = arr[x1, z1];
+
+                return Mathf.Lerp(Mathf.Lerp(v00, v10, tx), Mathf.Lerp(v01, v11, tx), tz);
+            }
+
+            float GetInterpTerrain(float x, float z)
+            {
+                 int x0 = Mathf.FloorToInt(x);
+                 int z0 = Mathf.FloorToInt(z);
+                 int x1 = Mathf.Min(x0 + 1, size.x - 1);
+                 int z1 = Mathf.Min(z0 + 1, size.y - 1);
+                 
+                 float tx = x - x0;
+                 float tz = z - z0;
+                 
+                 float h00 = terrainManagerCache.GetHeight(x0, z0);
+                 float h10 = terrainManagerCache.GetHeight(x1, z0);
+                 float h01 = terrainManagerCache.GetHeight(x0, z1);
+                 float h11 = terrainManagerCache.GetHeight(x1, z1);
+                 
+                 return Mathf.Lerp(Mathf.Lerp(h00, h10, tx), Mathf.Lerp(h01, h11, tx), tz);
+            }
+
             for (int x = 0; x < size.x - 1; x++)
             {
                 for (int z = 0; z < size.y - 1; z++)
                 {
-                    float wBL = map[x, z];
-                    float wBR = map[x + 1, z];
-                    float wTL = map[x, z + 1];
-                    float wTR = map[x + 1, z + 1];
-
-                    if (wBL <= minWaterHeight && wBR <= minWaterHeight && wTL <= minWaterHeight && wTR <= minWaterHeight)
+                    // Optimization: Check if whole cell is dry at main corners first
+                    if (map[x, z] <= minWaterHeight && map[x + 1, z] <= minWaterHeight && 
+                        map[x, z + 1] <= minWaterHeight && map[x + 1, z + 1] <= minWaterHeight)
                         continue;
 
-                    float hBL = terrainManagerCache.GetHeight(x, z) + wBL;
-                    float hBR = terrainManagerCache.GetHeight(x + 1, z) + wBR;
-                    float hTL = terrainManagerCache.GetHeight(x, z + 1) + wTL;
-                    float hTR = terrainManagerCache.GetHeight(x + 1, z + 1) + wTR;
+                    // Subdivide
+                    for (int sx = 0; sx < meshSubdivisions; sx++)
+                    {
+                        for (int sz = 0; sz < meshSubdivisions; sz++)
+                        {
+                            // Calculate fractional coordinates 0..1 within this cell
+                            float fx0 = (float)sx / meshSubdivisions;
+                            float fz0 = (float)sz / meshSubdivisions;
+                            float fx1 = (float)(sx + 1) / meshSubdivisions;
+                            float fz1 = (float)(sz + 1) / meshSubdivisions;
 
-                    int startIndex = verts.Count;
-                    verts.Add(new Vector3(x * cellSize, hBL, z * cellSize));         
-                    verts.Add(new Vector3((x + 1) * cellSize, hBR, z * cellSize));   
-                    verts.Add(new Vector3(x * cellSize, hTL, (z + 1) * cellSize));   
-                    verts.Add(new Vector3((x + 1) * cellSize, hTR, (z + 1) * cellSize)); 
+                            // Global coords
+                            float gx0 = x + fx0;
+                            float gz0 = z + fz0;
+                            float gx1 = x + fx1;
+                            float gz1 = z + fz1;
 
-                    uvs.Add(new Vector2(x * uvScale, z * uvScale));
-                    uvs.Add(new Vector2((x + 1) * uvScale, z * uvScale));
-                    uvs.Add(new Vector2(x * uvScale, (z + 1) * uvScale));
-                    uvs.Add(new Vector2((x + 1) * uvScale, (z + 1) * uvScale));
+                            // Interpolated Water Depths
+                            // Note: We clamp to ensure we don't go OOB, though the loop bounds x < size.x-1 should be safe for +1
+                            float wBL = GetInterp(map, gx0, gz0, size.x, size.y);
+                            float wBR = GetInterp(map, gx1, gz0, size.x, size.y);
+                            float wTL = GetInterp(map, gx0, gz1, size.x, size.y);
+                            float wTR = GetInterp(map, gx1, gz1, size.x, size.y);
 
-                    tris.Add(startIndex);
-                    tris.Add(startIndex + 2);
-                    tris.Add(startIndex + 1);
-                    tris.Add(startIndex + 1);
-                    tris.Add(startIndex + 2);
-                    tris.Add(startIndex + 3);
+                            if (wBL <= minWaterHeight && wBR <= minWaterHeight && wTL <= minWaterHeight && wTR <= minWaterHeight)
+                                continue;
+
+                            // Interpolated Terrain Heights
+                            float tBL = GetInterpTerrain(gx0, gz0);
+                            float tBR = GetInterpTerrain(gx1, gz0);
+                            float tTL = GetInterpTerrain(gx0, gz1);
+                            float tTR = GetInterpTerrain(gx1, gz1);
+
+                            // Final Heights
+                            float hBL = tBL + wBL;
+                            float hBR = tBR + wBR;
+                            float hTL = tTL + wTL;
+                            float hTR = tTR + wTR;
+
+                            int startIndex = verts.Count;
+                            verts.Add(new Vector3(gx0 * cellSize, hBL, gz0 * cellSize));         
+                            verts.Add(new Vector3(gx1 * cellSize, hBR, gz0 * cellSize));   
+                            verts.Add(new Vector3(gx0 * cellSize, hTL, gz1 * cellSize));   
+                            verts.Add(new Vector3(gx1 * cellSize, hTR, gz1 * cellSize)); 
+
+                            uvs.Add(new Vector2(gx0 * uvScale, gz0 * uvScale));
+                            uvs.Add(new Vector2(gx1 * uvScale, gz0 * uvScale));
+                            uvs.Add(new Vector2(gx0 * uvScale, gz1 * uvScale));
+                            uvs.Add(new Vector2(gx1 * uvScale, gz1 * uvScale));
+
+                            tris.Add(startIndex);
+                            tris.Add(startIndex + 2);
+                            tris.Add(startIndex + 1);
+                            tris.Add(startIndex + 1);
+                            tris.Add(startIndex + 2);
+                            tris.Add(startIndex + 3);
+                        }
+                    }
                 }
             }
 
@@ -429,10 +500,14 @@ namespace ClaimTycoon.Systems.Terrain
             for (int x = size.x - 1; x > 0; x--) AddWaterSkirt(x, size.y - 1, x - 1, size.y - 1);
             for (int z = size.y - 1; z > 0; z--) AddWaterSkirt(0, z, 0, z - 1);
             
+            // Note: Skirt is not yet subdivided, so it might show small gaps if the water surface is very curved at the boundary.
+            // For now keeping it simple as the edges are usually straight or submerged.
+            
             if (waterMesh == null)
             {
                 waterMesh = new Mesh();
                 waterMesh.name = "Water Mesh";
+                waterMesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32; // Required for high subdivision
                 if (waterMeshFilter != null) waterMeshFilter.mesh = waterMesh;
             }
 

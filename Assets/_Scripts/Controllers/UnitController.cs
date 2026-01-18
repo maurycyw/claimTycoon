@@ -5,8 +5,8 @@ using System.Collections.Generic;
 using ClaimTycoon.Systems.Units;
 using ClaimTycoon.Systems.Terrain;
 using ClaimTycoon.Systems.Buildings;
-using ClaimTycoon.Managers;
 using ClaimTycoon.Systems.Units.Jobs;
+using ClaimTycoon.Managers;
 
 namespace ClaimTycoon.Controllers
 {
@@ -16,11 +16,16 @@ namespace ClaimTycoon.Controllers
     [RequireComponent(typeof(NavMeshAgent))]
     [RequireComponent(typeof(CharacterStats))]
     [RequireComponent(typeof(AutoMiner))]
+    [RequireComponent(typeof(UnitAnimationController))]
+    [RequireComponent(typeof(UnitThoughtController))]
     public class UnitController : MonoBehaviour
     {
         private NavMeshAgent agent;
         private CharacterStats stats;
         private AutoMiner autoMiner;
+
+        private UnitAnimationController animController;
+        private UnitThoughtController thoughtController;
         
         [Header("State")]
         [SerializeField] private UnitState currentState = UnitState.Idle;
@@ -28,6 +33,7 @@ namespace ClaimTycoon.Controllers
 
         // New Job System
         private IJob activeJob = null;
+        private IJob pausedJob = null;
 
         // Stuck Detection
         private float stuckTimer = 0f;
@@ -47,6 +53,12 @@ namespace ClaimTycoon.Controllers
             autoMiner = GetComponent<AutoMiner>();
             
             if (autoMiner == null) autoMiner = gameObject.AddComponent<AutoMiner>();
+
+            animController = GetComponent<UnitAnimationController>();
+            if (animController == null) animController = gameObject.AddComponent<UnitAnimationController>();
+
+            thoughtController = GetComponent<UnitThoughtController>();
+            if (thoughtController == null) thoughtController = gameObject.AddComponent<UnitThoughtController>();
 
             if (agent != null) agent.enabled = false;
         }
@@ -138,14 +150,47 @@ namespace ClaimTycoon.Controllers
 
         public void MoveTo(Vector3 destination)
         {
-            StopAutoMining();
+            // Do NOT StopAutoMining here. Moving pauses the active job, and we want to resume logic later.
+            // StopAutoMining(); 
             StopAllCoroutines();
             jobQueue.Clear(); 
             
-            activeJob = null;
+            // If we have an active job, we are interrupting it -> Pause it
+            if (activeJob != null)
+            {
+                PauseActiveJob();
+            }
+
+            // Ensure paused job updates if we move again while paused (optional, but good for safety)
+            if (pausedJob != null)
+            {
+                 // Keep it paused.
+            }
+
+            // Don't set activeJob to null here if we just paused it? 
+            // Actually, for the logic of Move:
+            // The unit IS now Moving (statE), so it is NOT Working.
+            // activeJob reference generally means "currently executing job".
+            // If we pause it, we should probably clear activeJob but keep it in pausedJob.
+            
+            activeJob = null; 
             currentState = UnitState.Moving;
             agent.isStopped = false;
             agent.SetDestination(destination);
+        }
+
+        private void PauseActiveJob()
+        {
+            if (activeJob != null)
+            {
+                pausedJob = activeJob;
+                if (JobManager.Instance != null)
+                {
+                    JobManager.Instance.SetJobPaused(pausedJob, true);
+                }
+                Debug.Log($"[UnitController] Paused Job: {pausedJob.Type}");
+                // We do NOT unregister it, just pause it.
+            }
         }
 
         public void StartAutoMining(Vector3Int center, SluiceBox sluice)
@@ -161,6 +206,7 @@ namespace ClaimTycoon.Controllers
             {
                 autoMiner.StopMining();
                 currentState = UnitState.Idle;
+                animController.SetWorking(false);
                 Debug.Log("[UnitController] Auto Mining Stopped.");
             }
         }
@@ -168,6 +214,7 @@ namespace ClaimTycoon.Controllers
         public void SetCarryingDirt(bool val)
         {
             IsCarryingDirt = val;
+            animController.SetCarrying(val);
         }
 
         // --- BACKWARD COMPATIBILITY WRAPPER ---
@@ -191,6 +238,16 @@ namespace ClaimTycoon.Controllers
         {
             if ((currentState == UnitState.Idle || currentState == UnitState.AutoMining) && activeJob == null)
             {
+                // If we start a NEW job, we should clear any paused job (unless this IS the resumption, handled nicely if we call this with pausedJob)
+                if (pausedJob != null && pausedJob != job)
+                {
+                     // User started a DIFFERENT job. Correct logic: Cancel the paused one?
+                     // Prompt says: "or they use shift+right click again and setup the job from anew"
+                     // This implies old paused job is discarded.
+                     if (JobManager.Instance != null) JobManager.Instance.UnregisterJob(pausedJob);
+                     pausedJob = null;
+                }
+
                 ExecuteJob(job);
             }
             else
@@ -204,8 +261,17 @@ namespace ClaimTycoon.Controllers
         {
             StopAllCoroutines();
             activeJob = job;
+            animController.SetWorking(false);
             
+            // Register with JobManager (Safe to call even if already registered)
+            if (JobManager.Instance != null)
+            {
+                JobManager.Instance.RegisterJob(activeJob, this);
+                JobManager.Instance.SetJobPaused(activeJob, false); // Ensure not paused
+            }
+
             Debug.Log($"Unit Starting Job: {activeJob.Type} at {activeJob.TargetCoord}. Moving to {activeJob.StandPosition}");
+            thoughtController.ShowThought($"Doing {activeJob.Type}...");
 
             currentState = UnitState.Moving;
             stuckTimer = 0f;
@@ -218,12 +284,95 @@ namespace ClaimTycoon.Controllers
             {
                 Debug.LogError("Agent SetDestination Failed! Is the target on the NavMesh?");
                 currentState = UnitState.Idle;
+                // If failed, unregister
+                if (JobManager.Instance != null) JobManager.Instance.UnregisterJob(activeJob);
                 activeJob = null;
                 CheckQueue(); 
             }
             else
             {
                 activeJob.OnEnter(this);
+            }
+        }
+
+        public void CancelJob(IJob jobToCancel)
+        {
+            if (activeJob == jobToCancel)
+            {
+                Debug.Log($"[UnitController] Cancelling active job: {activeJob.Type}");
+                StopAllCoroutines();
+                agent.isStopped = true;
+                agent.ResetPath();
+                activeJob.OnExit(this); // Allow job to clean up
+                if (JobManager.Instance != null) JobManager.Instance.UnregisterJob(activeJob);
+                activeJob = null;
+                currentState = UnitState.Idle; // Will become AutoMining if not stopped?
+                StopAutoMining(); // Ensure we stop the loop if canceling active
+                animController.SetWorking(false);
+                CheckQueue();
+            }
+            else if (pausedJob == jobToCancel)
+            {
+                Debug.Log($"[UnitController] Cancelling paused job: {pausedJob.Type}");
+                if (JobManager.Instance != null) JobManager.Instance.UnregisterJob(pausedJob);
+                pausedJob = null;
+                StopAutoMining(); // If we cancel, we assume user wants to stop the whole auto process
+            }
+            else if (jobQueue.Contains(jobToCancel))
+            {
+                Debug.Log($"[UnitController] Cancelling queued job: {jobToCancel.Type}");
+                // Rebuild queue without the job to cancel
+                Queue<IJob> newQueue = new Queue<IJob>();
+                while (jobQueue.Count > 0)
+                {
+                    IJob job = jobQueue.Dequeue();
+                    if (job != jobToCancel)
+                    {
+                        newQueue.Enqueue(job);
+                    }
+                    else
+                    {
+                        if (JobManager.Instance != null) JobManager.Instance.UnregisterJob(job);
+                    }
+                }
+                jobQueue = newQueue;
+            }
+            else
+            {
+                Debug.LogWarning($"[UnitController] Attempted to cancel job not found: {jobToCancel.Type}");
+            }
+        }
+
+        public void ResumeJob()
+        {
+            if (pausedJob != null)
+            {
+                Debug.Log($"[UnitController] Resuming paused job: {pausedJob.Type}");
+                IJob jobToResume = pausedJob;
+                pausedJob = null; // Clear paused job reference
+                ExecuteJob(jobToResume); // Start executing it again
+            }
+            else
+            {
+                Debug.LogWarning("[UnitController] No job to resume.");
+            }
+        }
+
+        public void ResumeJob(IJob job)
+        {
+            if (pausedJob == job)
+            {
+                ResumeJob();
+            }
+            else if (pausedJob == null)
+            {
+                // This might happen if state got desynced or loaded from save without setting pausedJob?
+                Debug.LogWarning($"[UnitController] Requested to resume {job.Type} but no job is paused locally. Force executing.");
+                ExecuteJob(job);
+            }
+            else
+            {
+                Debug.LogError($"[UnitController] Mismatch! Requested to resume {job.Type} but local paused job is {pausedJob.Type}. Ignoring.");
             }
         }
 
@@ -305,6 +454,11 @@ namespace ClaimTycoon.Controllers
             if (failure)
             {
                 Debug.Log("[UnitController] Movement Failed/Stuck. Cancelling Job.");
+                if (activeJob != null)
+                {
+                    activeJob.OnExit(this); // Allow job to clean up
+                    if (JobManager.Instance != null) JobManager.Instance.UnregisterJob(activeJob);
+                }
                 activeJob = null;
                 currentState = currentState == UnitState.AutoMining ? UnitState.AutoMining : UnitState.Idle;
                 
@@ -312,6 +466,7 @@ namespace ClaimTycoon.Controllers
                 {
                     autoMiner.StopMining(); // Or retry logic
                 }
+                CheckQueue(); // Check for next job if current one failed
             }
             else
             {
@@ -324,6 +479,7 @@ namespace ClaimTycoon.Controllers
             if (activeJob != null)
             {
                 currentState = UnitState.Working;
+                animController.SetWorking(true, GetWorkType(activeJob.Type));
                 // Job continues in Update loop -> calls activeJob.Update()
             }
             else
@@ -339,7 +495,12 @@ namespace ClaimTycoon.Controllers
             {
                 activeJob.OnExit(this);
                 Debug.Log($"[UnitController] Completed Job: {activeJob.Type}");
+                thoughtController.ShowThought("Done!");
+                
+                if (JobManager.Instance != null) JobManager.Instance.UnregisterJob(activeJob);
+
                 activeJob = null;
+                animController.SetWorking(false);
             }
 
             // Fix: Check if Auto Miner is active to resume loop
@@ -350,6 +511,7 @@ namespace ClaimTycoon.Controllers
             else
             {
                 currentState = UnitState.Idle;
+                animController.SetWorking(false);
             }
              
             // If AutoMining, next Update will trigger autoMiner.DecideNextAction() because local activeJob is null
@@ -363,6 +525,19 @@ namespace ClaimTycoon.Controllers
             {
                 IJob nextJob = jobQueue.Dequeue();
                 ExecuteJob(nextJob);
+                    }
+        }
+
+        private int GetWorkType(JobType jobType)
+        {
+            switch (jobType)
+            {
+                case JobType.Mine: return 1;
+                case JobType.DropDirt: return 2;
+                case JobType.FeedSluice: return 3;
+                case JobType.Build: return 4;
+                case JobType.CleanSluice: return 5;
+                default: return 0;
             }
         }
     }
