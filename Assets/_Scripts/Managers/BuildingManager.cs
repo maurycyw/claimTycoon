@@ -57,9 +57,17 @@ namespace ClaimTycoon.Managers
 
         public void StartPlacementById(string buildingId)
         {
+            Debug.Log($"[BuildingManager] StartPlacementById called for: {buildingId}");
+            
             // Simple lookup for now
             if (buildingId == "SluiceBox")
             {
+                if (sluiceBoxPrefab == null)
+                {
+                    Debug.LogError("[BuildingManager] SluiceBox Prefab is NOT assigned in the Inspector!");
+                    return;
+                }
+                
                 // Sluice Box costs 0 if from inventory? 
                 // Logic says if isSluice=true, we check inventory instead of money.
                 StartPlacementInternal(sluiceBoxPrefab, 0, true);

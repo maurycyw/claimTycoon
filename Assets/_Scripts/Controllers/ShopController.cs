@@ -21,11 +21,27 @@ namespace ClaimTycoon.Controllers
             }
         }
         
+        public bool IsShopOpen => shopPanel != null && shopPanel.activeSelf;
+
+        public void SetShopActive(bool isActive)
+        {
+            if (shopPanel != null) shopPanel.SetActive(isActive);
+        }
+
         public void ToggleShop()
         {
-            if (shopPanel != null)
+            // If calling from UI Button directly, redirect to HUDController
+            if (HUDController.Instance != null)
             {
-                shopPanel.SetActive(!shopPanel.activeSelf);
+                HUDController.Instance.ToggleShop();
+            }
+            else
+            {
+                // Fallback
+                 if (shopPanel != null)
+                {
+                    shopPanel.SetActive(!shopPanel.activeSelf);
+                }
             }
         }
 

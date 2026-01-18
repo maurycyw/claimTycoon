@@ -40,7 +40,12 @@ namespace ClaimTycoon.Managers
         {
             OnGoldChanged?.Invoke(GoldAmount);
             OnMoneyChanged?.Invoke(MoneyAmount);
-            // Inventory triggers its own events if needed, or we expose them here.
+            
+            // Give initial items for testing
+            if (PlayerInventory.GetItemCount("SluiceBox") == 0)
+            {
+                PlayerInventory.AddItem("SluiceBox", 1);
+            }
         }
 
         // ... (Rest of existing methods)

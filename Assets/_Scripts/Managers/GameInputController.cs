@@ -108,7 +108,7 @@ namespace ClaimTycoon.Managers
 
             if (Physics.Raycast(ray, out RaycastHit hit, 1000f))
             {
-                // PRIORITY: If Unit Selected AND Carrying Dirt -> Check for Drop/Action
+                if (SelectionManager.Instance == null) return;
                 UnitController selectedUnit = SelectionManager.Instance.SelectedUnit;
                 if (selectedUnit != null && selectedUnit.IsCarryingDirt)
                 {
@@ -178,7 +178,7 @@ namespace ClaimTycoon.Managers
 
         private void HandleRightClick()
         {
-            // Only perform actions if a unit is selected
+            if (SelectionManager.Instance == null) return;
             UnitController selectedUnit = SelectionManager.Instance.SelectedUnit;
             if (selectedUnit == null) return;
 

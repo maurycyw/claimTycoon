@@ -2,23 +2,45 @@ using UnityEngine;
 using TMPro;
 using ClaimTycoon.Managers;
 using ClaimTycoon.Systems.Units;
+using UnityEngine.EventSystems;
 
 namespace ClaimTycoon.Controllers
 {
     public class HUDController : MonoBehaviour
     {
+        public static HUDController Instance { get; private set; }
+
         [Header("UI References")]
         [SerializeField] private TextMeshProUGUI goldText;
         [SerializeField] private TextMeshProUGUI moneyText;
         [SerializeField] private InventoryUI inventoryUI;
+        [SerializeField] public ShopController shopController; // Made public for BottomBarUI visual sync
 
         [Header("Stats Panel")]
         [SerializeField] private GameObject statsPanel;
         [SerializeField] private TextMeshProUGUI unitNameText;
         [SerializeField] private TextMeshProUGUI statsContentText; // Simple text for list for now, or use container
 
+        public event System.Action OnPanelStateChanged;
+        public bool IsInventoryOpen => inventoryUI != null && inventoryUI.isActiveAndEnabled;
+        public bool IsAnyPanelOpen { get; private set; }
+
+        private void Awake()
+        {
+            if (Instance != null && Instance != this)
+            {
+                Destroy(gameObject);
+                return;
+            }
+            Instance = this;
+        }
+
         private void Start()
         {
+            // Find references if missing (Fallbacks) - Include Inactive!
+            if (inventoryUI == null) inventoryUI = FindObjectOfType<InventoryUI>(true);
+            if (shopController == null) shopController = FindObjectOfType<ShopController>(true);
+
             // Subscribe to events
             if (ResourceManager.Instance != null)
             {
@@ -37,6 +59,9 @@ namespace ClaimTycoon.Controllers
             }
 
             if (statsPanel != null) statsPanel.SetActive(false);
+            
+            // Ensure correct initial state
+            NotifyPanelStateChange();
         }
 
         private void OnDestroy()
@@ -52,6 +77,79 @@ namespace ClaimTycoon.Controllers
                 SelectionManager.Instance.OnUnitDeselected -= OnUnitDeselected;
             }
         }
+
+        #region Panel Management
+
+        public void ToggleInventory()
+        {
+             if (inventoryUI == null)
+            {
+                Debug.LogError("[HUDController] Cannot Toggle Inventory: InventoryUI reference is missing!");
+                return;
+            }
+
+            // If opening Inventory, close Shop
+            bool isOpening = !inventoryUI.isActiveAndEnabled; // Simplified check
+            
+            if (isOpening)
+            {
+                CloseAllPanels();
+                inventoryUI.gameObject.SetActive(true);
+            }
+            else
+            {
+                inventoryUI.gameObject.SetActive(false);
+            }
+            
+            NotifyPanelStateChange();
+        }
+
+        public void ToggleShop()
+        {
+            if (shopController == null) return;
+
+            bool isOpening = !shopController.IsShopOpen; // Check via property we will add
+            
+            if (isOpening)
+            {
+                CloseAllPanels();
+                shopController.SetShopActive(true);
+            }
+            else
+            {
+                shopController.SetShopActive(false);
+            }
+
+            NotifyPanelStateChange();
+        }
+
+        public void CloseAllPanels()
+        {
+            if (inventoryUI != null) inventoryUI.gameObject.SetActive(false);
+            if (shopController != null) shopController.SetShopActive(false);
+            // Add other panels here (Staff, etc.)
+        }
+
+        private void NotifyPanelStateChange()
+        {
+            bool inventoryOpen = inventoryUI != null && inventoryUI.isActiveAndEnabled;
+            bool shopOpen = shopController != null && shopController.IsShopOpen;
+
+            IsAnyPanelOpen = inventoryOpen || shopOpen;
+
+            // Handle EventSystem Navigation
+            if (EventSystem.current != null)
+            {
+                EventSystem.current.sendNavigationEvents = IsAnyPanelOpen;
+            }
+
+            Debug.Log($"[HUDController] Panel State Updated. AnyOpen: {IsAnyPanelOpen}");
+            OnPanelStateChanged?.Invoke();
+        }
+
+        #endregion
+
+        #region Stats & Resource UI
 
         private void OnUnitSelected(UnitController unit)
         {
@@ -70,27 +168,21 @@ namespace ClaimTycoon.Controllers
             if (statsPanel != null) statsPanel.SetActive(false);
         }
 
+        private void Update()
+        {
+             // Continuously update stats/status if a unit is selected and panel is open
+             if (SelectionManager.Instance != null && SelectionManager.Instance.SelectedUnit != null && statsPanel != null && statsPanel.activeSelf)
+             {
+                 UpdateStatsDisplay(SelectionManager.Instance.SelectedUnit);
+             }
+        }
+
         private void UpdateStatsDisplay(UnitController unit)
         {
             if (statsContentText == null) return;
             
-            CharacterStats stats = unit.GetComponent<CharacterStats>();
-            if (stats == null) return;
-
-            // Simple string builder for prototype
-            string content = "";
-            
-            // Allow access to stats list? Or expose it via method?
-            // CharacterStats doesn't expose list directly yet. 
-            // We can add a specialized method or just iterate common types.
-            
-            Stat mining = stats.GetStat(StatType.Mining);
-            if (mining != null) content += $"Mining Lvl {mining.level}\n";
-            
-            Stat moving = stats.GetStat(StatType.MoveSpeed);
-            if (moving != null) content += $"Speed Lvl {moving.level}\n";
-
-            statsContentText.text = content;
+            // Replaced stats logic with Activity Status as requested ("Idle", "Digging" etc)
+            statsContentText.text = unit.GetActivityStatus();
         }
 
         private void UpdateGoldUI(float amount)
@@ -104,8 +196,11 @@ namespace ClaimTycoon.Controllers
             if (moneyText != null)
                 moneyText.text = $"$: {amount:F0}";
         }
+        
+        #endregion
 
-        // Called by Button event in Inspector
+        #region Button Events
+
         public void OnSellButtonClicked()
         {
             if (ResourceManager.Instance != null)
@@ -116,10 +211,14 @@ namespace ClaimTycoon.Controllers
 
         public void OnInventoryButtonClicked()
         {
-            if (inventoryUI != null)
-            {
-                inventoryUI.ToggleInventory();
-            }
+            ToggleInventory();
         }
+
+        public void OnShopButtonClicked()
+        {
+            ToggleShop();
+        }
+        
+        #endregion
     }
 }

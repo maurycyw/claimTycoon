@@ -540,5 +540,36 @@ namespace ClaimTycoon.Controllers
                 default: return 0;
             }
         }
+        public string GetActivityStatus()
+        {
+            if (activeJob != null)
+            {
+                // Custom strings based on Job Type
+                switch (activeJob.Type)
+                {
+                    case JobType.Mine: return "Digging";
+                    case JobType.DropDirt: return "Dropping Off";
+                    case JobType.FeedSluice: return "Feeding Sluice";
+                    case JobType.Build: return "Building";
+                    case JobType.CleanSluice: return "Cleaning";
+                    default: return activeJob.Type.ToString();
+                }
+            }
+            
+            if (currentState == UnitState.Moving)
+            {
+                if (IsCarryingDirt) return "Carrying";
+                return "Moving";
+            }
+
+            if (currentState == UnitState.AutoMining)
+            {
+                if (IsCarryingDirt) return "Carrying"; // Auto mining involves carrying
+                // If mining, we might be in 'Working' state generally, but if we are just traversing:
+                return "Auto Mining"; 
+            }
+
+            return "Idle...";
+        }
     }
 }

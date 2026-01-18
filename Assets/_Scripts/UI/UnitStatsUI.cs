@@ -12,6 +12,7 @@ namespace ClaimTycoon.UI
         [SerializeField] private GameObject contentPanel; // The panel showing the stats
         [SerializeField] private TextMeshProUGUI nameText;
         [SerializeField] private TextMeshProUGUI statsText;
+        [SerializeField] private TextMeshProUGUI activityText;
 
         private void Start()
         {
@@ -33,33 +34,43 @@ namespace ClaimTycoon.UI
             }
         }
 
+        private void Update()
+        {
+            if (SelectionManager.Instance != null && SelectionManager.Instance.SelectedUnit != null)
+            {
+                 // If the panel is active and we have a selected unit, strictly referring to it might be safer
+                 // But since UpdateUI is event based, we track nothing.
+                 // Better: If panel is active, we assume we should show info for the SelectedUnit.
+                 if (contentPanel != null && contentPanel.activeSelf)
+                 {
+                     // Force update text for dynamic status
+                     UpdateUI(SelectionManager.Instance.SelectedUnit);
+                 }
+            }
+        }
+
         private void UpdateUI(UnitController unit)
         {
             if (contentPanel != null) contentPanel.SetActive(true);
             
             if (nameText != null) nameText.text = unit.name;
 
-            if (statsText != null)
-            {
-                CharacterStats stats = unit.GetComponent<CharacterStats>();
-                if (stats != null)
+                if (statsText != null)
                 {
-                    // Logic from old HUDController, potentially expanded
-                    string content = "";
-                    Stat mining = stats.GetStat(StatType.Mining);
-                    if (mining != null) content += $"Mining: Lvl {mining.level}\n";
+                    string status = unit.GetActivityStatus();
                     
-                    Stat speed = stats.GetStat(StatType.MoveSpeed);
-                    if (speed != null) content += $"Speed: Lvl {speed.level}\n";
-                    
-                    // Add more stats as needed
-                    statsText.text = content;
+                    // Optional: If user wants stats AND status, we could append. 
+                    // But user specifically said "it shows stats... instead of Idle", implying they want Idle.
+                    // We will prioritize the status string.
+                    statsText.text = status;
                 }
-                else
+
+                if (activityText != null)
                 {
-                    statsText.text = "No Stats Available";
+                    // If activityText is ALSO assigned, we can replicate the text or leave it blank/redundant.
+                    // But to avoid confusion, let's keep it consistent.
+                    activityText.text = unit.GetActivityStatus();
                 }
-            }
         }
 
         private void HideUI()

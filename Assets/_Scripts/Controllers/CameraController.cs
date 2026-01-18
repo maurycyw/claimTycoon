@@ -28,6 +28,9 @@ namespace ClaimTycoon.Controllers
 
         private void HandleMovement()
         {
+            // Block Movement if Panel is Open
+            if (HUDController.Instance != null && HUDController.Instance.IsAnyPanelOpen) return;
+
             Vector3 pos = transform.position;
             
             // New Input System

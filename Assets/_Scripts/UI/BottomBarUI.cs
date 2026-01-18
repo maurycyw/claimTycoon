@@ -31,6 +31,12 @@ namespace ClaimTycoon.UI
                 SelectionManager.Instance.OnUnitDeselected += OnUnitDeselected;
             }
 
+            // Subscribe to HUD State
+            if (HUDController.Instance != null)
+            {
+                HUDController.Instance.OnPanelStateChanged += UpdateButtonVisuals;
+            }
+
             // Setup Buttons
             if (shopButton != null) shopButton.onClick.AddListener(ToggleShop);
             if (inventoryButton != null) inventoryButton.onClick.AddListener(ToggleInventory);
@@ -42,9 +48,8 @@ namespace ClaimTycoon.UI
             // Hide Selection Panel initially
             if (selectionPanel != null) selectionPanel.SetActive(false);
             
-            // Debug Assignments
-            if (shopButton != null) Debug.Log($"[BottomBarUI] Shop Button assigned to: {shopButton.name}");
-            if (inventoryButton != null) Debug.Log($"[BottomBarUI] Inventory Button assigned to: {inventoryButton.name}");
+            // Initial Visual Sync
+            UpdateButtonVisuals();
         }
 
         private void OnDestroy()
@@ -53,6 +58,10 @@ namespace ClaimTycoon.UI
             {
                 SelectionManager.Instance.OnUnitSelected -= OnUnitSelected;
                 SelectionManager.Instance.OnUnitDeselected -= OnUnitDeselected;
+            }
+             if (HUDController.Instance != null)
+            {
+                HUDController.Instance.OnPanelStateChanged -= UpdateButtonVisuals;
             }
         }
 
@@ -68,73 +77,58 @@ namespace ClaimTycoon.UI
 
         private void ToggleShop()
         {
-            Debug.Log("[BottomBarUI] ToggleShop called.");
-            if (shopPanel != null)
+            if (HUDController.Instance != null)
             {
-                bool newState = !shopPanel.gameObject.activeSelf;
-                shopPanel.gameObject.SetActive(newState);
-                
-                if (newState)
-                {
-                    // Panel Open -> Button Selected
-                    if (shopButton != null) shopButton.Select();
-                }
-                else
-                {
-                    // Panel Closed -> Button Deselected
-                    UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(null);
-                }
-            }
-            else
-            {
-                Debug.LogWarning("ShopPanel reference missing in BottomBarUI");
+                HUDController.Instance.ToggleShop();
             }
         }
 
         private void ToggleInventory()
         {
-            Debug.Log("[BottomBarUI] ToggleInventory called.");
-            if (inventoryPanel != null)
+            if (HUDController.Instance != null)
             {
-                // We need to know the NEW state. InventoryUI.ToggleInventory toggles internally.
-                // We'll peek at the current state, assume it flips. 
-                // Better approach: Check logic in InventoryUI or just check activeSelf after toggle if possible?
-                // InventoryUI toggles immediately.
-                
-                inventoryPanel.ToggleInventory(); 
-                
-                // Now check the state of the panel object inside InventoryUI? 
-                // InventoryUI doesn't expose the panel publically but we can guess or modify InventoryUI. 
-                // Actually, let's just use the known reference if we had it, but InventoryUI hides it.
-                // Let's rely on standard Select behavior for now, or clearer:
-                
-                // Issue: We don't have direct access to 'inventoryPanel.activeSelf' cleanly unless we expose it.
-                // But wait, BottomBarUI HAS a serialized field 'inventoryPanel' of type InventoryUI.
-                // Does InventoryUI expose its state? No.
-                // Let's try to assume it worked.
-                
-                // Ideally we update InventoryUI to return the new state, but for now let's just Select().
-                if (inventoryButton != null) inventoryButton.Select();
-                
-                // If the user wants it to DESELECT when closing, we need to know if it closed.
-                // For now, let's just keep the functionality consistent with Shop for the Select part, 
-                // but we might miss the 'Deselect on Close' if we don't know state.
-                // Force deselect if we think it closed? 
-                // Let's leave Inventory simple for a second or update InventoryUI. 
+                HUDController.Instance.ToggleInventory();
             }
-             // RE-READING InventoryUI Code from previous turn (Step 221):
-             // public void ToggleInventory() { ... inventoryPanel.SetActive(isActive); ... }
-             // It doesn't return state. 
-             // We can check `inventoryPanel.gameObject.activeInHierarchy`? 
-             // Ref: `[SerializeField] private InventoryUI inventoryPanel;`
-             // `inventoryPanel` is the SCRIPT. The script is on a GameObject. Is that GO the panel?
-             // In Step 221: `[SerializeField] private GameObject inventoryPanel;` inside InventoryUI.
-             // so InventoryUI script sits on a manager probably.
-             
-             // Simple Fix: modification to ToggleInventory to return bool, OR just Select() for now 
-             // and fix Deselect if user complains specifically about Inventory.
-             // OR: Logic catch:
-             if (inventoryButton != null) inventoryButton.Select();
+        }
+
+        private void UpdateButtonVisuals()
+        {
+            if (HUDController.Instance == null) return;
+
+            // Update Shop Button
+            if (shopButton != null)
+            {
+                if (HUDController.Instance.shopController != null && HUDController.Instance.shopController.IsShopOpen)
+                {
+                    shopButton.Select();
+                }
+                else
+                {
+                    // If we currently have it selected, deselect it? 
+                    // Or actually, we just rely on standard EventSystem behavior?
+                    // Issue: If it was selected, and now we close it, it stays "Highlighted" or "Selected" visually unless we clear it.
+                    if (UnityEngine.EventSystems.EventSystem.current.currentSelectedGameObject == shopButton.gameObject)
+                    {
+                        UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(null);
+                    }
+                }
+            }
+
+            // Update Inventory Button
+            if (inventoryButton != null)
+            {
+                 if (HUDController.Instance.IsInventoryOpen)
+                {
+                    inventoryButton.Select();
+                }
+                else
+                {
+                     if (UnityEngine.EventSystems.EventSystem.current.currentSelectedGameObject == inventoryButton.gameObject)
+                    {
+                        UnityEngine.EventSystems.EventSystem.current.SetSelectedGameObject(null);
+                    }
+                }
+            }
         }
 
         private void ToggleStaff()

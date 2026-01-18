@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using ClaimTycoon.Managers;
+using ClaimTycoon.Systems.Inventories;
 
 namespace ClaimTycoon.UI
 {
@@ -22,12 +23,8 @@ namespace ClaimTycoon.UI
         [Header("Item List")]
         [SerializeField] private GameObject shopItemPrefab;
 
-        [Header("Item Icons")]
-        [SerializeField] private Sprite sluiceBoxIcon;
-        [SerializeField] private Sprite fuelIcon;
-        [SerializeField] private Sprite landIcon;
-        [SerializeField] private Sprite shackIcon;
-        [SerializeField] private Sprite goldIcon;
+        // [Header("Item Icons")] - Removed
+        // Fields removed: sluiceBoxIcon, fuelIcon, etc.
 
         private enum ShopCategory { Equipment, Supplies, Land, Buildings, Sell }
         private ShopCategory currentCategory = ShopCategory.Equipment;
@@ -48,7 +45,10 @@ namespace ClaimTycoon.UI
             if (currentCategory == ShopCategory.Sell)
             {
                 Debug.Log("[ShopContentUI] Creating Sell Gold item...");
-                // Wrap SellGold to refresh UI after selling
+                // Sell Gold is special, might not be in DB or is special case. Let's keep icon lookup safe.
+                Sprite goldIcon = null;
+                if (ItemDatabase.Instance != null) goldIcon = ItemDatabase.Instance.GetItemIcon("Gold");
+                
                 CreateItem("Sell Gold", "Sell all gold for cash", () => 
                 { 
                     ResourceManager.Instance.SellGold(); 
@@ -60,16 +60,16 @@ namespace ClaimTycoon.UI
                  switch (currentCategory)
                 {
                     case ShopCategory.Equipment:
-                        CreateItem("Sluice Box", "Basic washing equipment", () => BuyItem("SluiceBox", 100), 100, sluiceBoxIcon);
+                        CreateShopItemFromDB("SluiceBox");
                         break;
                     case ShopCategory.Supplies:
-                        CreateItem("Fuel", "Fuel for machines", () => BuyItem("Fuel", 10), 10, fuelIcon);
+                        CreateShopItemFromDB("Fuel");
                         break;
                     case ShopCategory.Land:
-                         CreateItem("Land Claim", "Expand territory", () => Debug.Log("Buy Land"), 500, landIcon);
+                         CreateShopItemFromDB("LandClaim");
                          break;
                     case ShopCategory.Buildings:
-                         CreateItem("Shack", "Unit Housing", () => Debug.Log("Buy Shack"), 200, shackIcon);
+                         CreateShopItemFromDB("Shack");
                          break;
                 }
             }
@@ -80,16 +80,20 @@ namespace ClaimTycoon.UI
                 RectTransform rt = itemsContainer.GetComponent<RectTransform>();
                 if (rt != null)
                 {
-                    // Force the layout system to calculate sizes immediately
                     LayoutRebuilder.ForceRebuildLayoutImmediate(rt);
-                    
-                    // Reset scroll position to the TOP (0,0)
-                    // If your anchor is Top-Stretch, 0 means Top.
                     rt.anchoredPosition = Vector2.zero;
-                    Debug.Log($"[ShopContentUI] Reset Item Container Position to {rt.anchoredPosition}");
                 }
             }
         }
+        
+        private void CreateShopItemFromDB(string id)
+        {
+            if (ItemDatabase.Instance == null) return;
+            var def = ItemDatabase.Instance.GetItemDef(id);
+            CreateItem(def.displayName, def.description, () => BuyItem(def.id, def.basePrice), def.basePrice, def.icon);
+        }
+
+
 
         private void CreateItem(string name, string desc, UnityEngine.Events.UnityAction onClick, int price, Sprite icon = null)
         {
