@@ -13,7 +13,7 @@ namespace ClaimTycoon.Systems.Terrain
         [SerializeField] private float minWaterHeight = 0.01f;
         [SerializeField] private Material waterMaterial; // explicitly assign here
         [SerializeField] private int preWarmIterations = 500;
-        [SerializeField] private int meshSubdivisions = 4; // Increased default for smoothness
+        [SerializeField] private int meshSubdivisions = 8; // Increased for smoothness
         
         [SerializeField] private float uvScale = 0.1f;
         [SerializeField] private Vector2 waterScrollVelocity = new Vector2(0, -0.5f);
@@ -37,6 +37,7 @@ namespace ClaimTycoon.Systems.Terrain
         private List<Vector3> verts = new List<Vector3>(160000);
         private List<int> tris = new List<int>(240000);
         private List<Vector2> uvs = new List<Vector2>(160000);
+        private List<Color> colors = new List<Color>(160000);
 
         private TerrainManager terrainManagerCache;
 
@@ -66,15 +67,49 @@ namespace ClaimTycoon.Systems.Terrain
                 waterMeshFilter = waterMeshObject.AddComponent<MeshFilter>();
                 waterMeshRenderer = waterMeshObject.AddComponent<MeshRenderer>();
                 
-                if (waterMaterial != null) waterMeshRenderer.material = waterMaterial;
-                else if (GetComponent<MeshRenderer>() != null) waterMeshRenderer.material = GetComponent<MeshRenderer>().sharedMaterial;
+                if (waterMaterial != null) 
+                {
+                    // Create a clone to avoid modifying the asset
+                    waterMaterial = new Material(waterMaterial);
+                    
+                    // Fix Shader: Standard URP Lit does not support Vertex Alpha transparency.
+                    // We swap to Particles/Lit for better edge fading if we detect specific "hard" shaders.
+                    if (waterMaterial.shader.name == "Universal Render Pipeline/Lit" || 
+                        waterMaterial.shader.name == "Universal Render Pipeline/Simple Lit")
+                    {
+                        Shader particleShader = Shader.Find("Universal Render Pipeline/Particles/Lit");
+                        if (particleShader != null)
+                        {
+                            waterMaterial.shader = particleShader;
+                            waterMaterial.SetFloat("_Surface", 1.0f); // Transparent
+                            waterMaterial.SetFloat("_Blend", 0.0f);   // Alpha
+                            // Re-apply base color to the new shader property if needed
+                             if (waterMaterial.HasProperty("_BaseColor")) 
+                                waterMaterial.SetColor("_BaseColor", waterMaterial.GetColor("_BaseColor"));
+                        }
+                    }
+                    waterMeshRenderer.material = waterMaterial;
+                }
                 else 
                 {
                      // Create a default material if none exists
-                     Shader shader = Shader.Find("Universal Render Pipeline/Lit");
+                     // Prefer Particle shaders as they support Vertex Colors for alpha fading
+                     Shader shader = Shader.Find("Universal Render Pipeline/Particles/Lit");
+                     if (!shader) shader = Shader.Find("Particles/Standard Surface");
+                     if (!shader) shader = Shader.Find("Universal Render Pipeline/Lit");
                      if (!shader) shader = Shader.Find("Standard");
+                     
                      waterMaterial = new Material(shader);
                      waterMaterial.color = new Color(0.2f, 0.5f, 0.9f, 0.7f);
+                     
+                     // Ensure Surface type is set to Transparent for URP Particles
+                     if (shader.name.Contains("Universal"))
+                     {
+                         waterMaterial.SetFloat("_Surface", 1.0f); // Transparent
+                         waterMaterial.SetFloat("_Blend", 0.0f);   // Alpha
+                         waterMaterial.SetColor("_BaseColor", waterMaterial.color);
+                     }
+                     
                      waterMeshRenderer.material = waterMaterial;
                 }
                 
@@ -97,16 +132,29 @@ namespace ClaimTycoon.Systems.Terrain
                float curveOffset = Mathf.Sin(z * 0.1f) * 3f;
                float centerX = 25f + curveOffset;
                
-               // Fill roughly the river bed width (Radius 2 around center)
-               int startX = Mathf.FloorToInt(centerX - 2f);
-               int endX = Mathf.CeilToInt(centerX + 2f);
+                // Fill river bed based on terrain height
+               // Match the terrain river width (approx 5.0f radius)
+               int scanRadius = 6;
+               int startX = Mathf.FloorToInt(centerX - scanRadius);
+               int endX = Mathf.CeilToInt(centerX + scanRadius);
                
+               float targetWaterSurface = 1.5f; // Initial river level
+
                for (int x = startX; x <= endX; x++)
                {
                    if (x >= 0 && x < gridSize.x)
                    {
-                        waterMapRead[x, z] = 1.8f;
-                        // Write buffer will be synced in SimulateFlow (or initial copy)
+                        float terrainHeight = terrainManagerCache.GetHeight(x, z);
+                        float depth = targetWaterSurface - terrainHeight;
+                        
+                        if (depth > 0)
+                        {
+                            waterMapRead[x, z] = depth;
+                        }
+                        else
+                        {
+                            waterMapRead[x, z] = 0f;
+                        }
                    }
                }
             }
@@ -357,45 +405,147 @@ namespace ClaimTycoon.Systems.Terrain
             verts.Clear();
             tris.Clear();
             uvs.Clear();
+            colors.Clear();
 
             // Local ref for speed
             float[,] map = waterMapRead;
+            
+            // Pre-calculate Effective Water Surface Height
+            // This prevents the water mesh from "climbing" the banks.
+            // Wet nodes = Terrain + Depth
+            // Dry Coast nodes = Average breadth of neighbors.
+            float[,] surfaceLevels = new float[size.x, size.y];
+            bool[,] isWet = new bool[size.x, size.y];
+
+            // Pass 1: Identify Wet/Dry and Basic Heights
+            for (int x = 0; x < size.x; x++)
+            {
+                for (int z = 0; z < size.y; z++)
+                {
+                    float d = map[x, z];
+                    if (d > 0.001f)
+                    {
+                        isWet[x, z] = true;
+                        surfaceLevels[x, z] = terrainManagerCache.GetHeight(x, z) + d;
+                    }
+                    else
+                    {
+                        isWet[x, z] = false;
+                        surfaceLevels[x, z] = -999f; // Mark as undefined
+                    }
+                }
+            }
+
+            // Pass 2: Extrapolate to Coast
+            for (int x = 0; x < size.x; x++)
+            {
+                for (int z = 0; z < size.y; z++)
+                {
+                    if (!isWet[x, z])
+                    {
+                        // Check neighbors
+                        float sum = 0;
+                        int count = 0;
+
+                        void Check(int nx, int nz)
+                        {
+                            if (nx >= 0 && nx < size.x && nz >= 0 && nz < size.y && isWet[nx, nz])
+                            {
+                                sum += surfaceLevels[nx, nz];
+                                count++;
+                            }
+                        }
+
+                        Check(x + 1, z);
+                        Check(x - 1, z);
+                        Check(x, z + 1);
+                        Check(x, z - 1);
+
+                        if (count > 0)
+                        {
+                            surfaceLevels[x, z] = sum / count;
+                        }
+                        else
+                        {
+                            // Far from water, just clip it way down or keep at terrain (irrelevant as alpha will be 0)
+                            // Keeping it at terrain height - bias might help Z-cull?
+                            // Let's just put it at terrain height but slightly below to avoid z-fighting
+                            surfaceLevels[x, z] = terrainManagerCache.GetHeight(x, z) - 1.0f;
+                        }
+                    }
+                }
+            }
+
+            // Cache for vertex indices to support welding
+            int subWidth = size.x * meshSubdivisions + 1;
+            int subHeight = size.y * meshSubdivisions + 1;
+            int[] vertexIndices = new int[subWidth * subHeight];
+            System.Array.Fill(vertexIndices, -1);
 
             // Helper for interpolation
-            float GetInterp(float[,] arr, float x, float z, int w, int h)
+            // We now interpolate the PRE-CALCULATED Surface Levels
+            float GetInterpHeight(float x, float z)
             {
                 int x0 = Mathf.FloorToInt(x);
                 int z0 = Mathf.FloorToInt(z);
-                int x1 = Mathf.Min(x0 + 1, w - 1);
-                int z1 = Mathf.Min(z0 + 1, h - 1);
+                int x1 = Mathf.Min(x0 + 1, size.x - 1);
+                int z1 = Mathf.Min(z0 + 1, size.y - 1);
 
                 float tx = x - x0;
                 float tz = z - z0;
 
-                float v00 = arr[x0, z0];
-                float v10 = arr[x1, z0];
-                float v01 = arr[x0, z1];
-                float v11 = arr[x1, z1];
+                // Linear Interpolation for Flat Surface Extension
+                float v00 = surfaceLevels[x0, z0];
+                float v10 = surfaceLevels[x1, z0];
+                float v01 = surfaceLevels[x0, z1];
+                float v11 = surfaceLevels[x1, z1];
 
                 return Mathf.Lerp(Mathf.Lerp(v00, v10, tx), Mathf.Lerp(v01, v11, tx), tz);
             }
 
-            float GetInterpTerrain(float x, float z)
+            float GetInterpDepth(float x, float z)
             {
-                 int x0 = Mathf.FloorToInt(x);
-                 int z0 = Mathf.FloorToInt(z);
-                 int x1 = Mathf.Min(x0 + 1, size.x - 1);
-                 int z1 = Mathf.Min(z0 + 1, size.y - 1);
-                 
-                 float tx = x - x0;
-                 float tz = z - z0;
-                 
-                 float h00 = terrainManagerCache.GetHeight(x0, z0);
-                 float h10 = terrainManagerCache.GetHeight(x1, z0);
-                 float h01 = terrainManagerCache.GetHeight(x0, z1);
-                 float h11 = terrainManagerCache.GetHeight(x1, z1);
-                 
-                 return Mathf.Lerp(Mathf.Lerp(h00, h10, tx), Mathf.Lerp(h01, h11, tx), tz);
+                int x0 = Mathf.FloorToInt(x);
+                int z0 = Mathf.FloorToInt(z);
+                int x1 = Mathf.Min(x0 + 1, size.x - 1);
+                int z1 = Mathf.Min(z0 + 1, size.y - 1);
+
+                float tx = x - x0;
+                float tz = z - z0;
+                
+                // Keep smoothstep for depth/alpha to look nice? 
+                // Matching linearity with height might be safer to prevent alpha popping.
+                // Let's use Linear.
+                
+                float v00 = map[x0, z0];
+                float v10 = map[x1, z0];
+                float v01 = map[x0, z1];
+                float v11 = map[x1, z1];
+
+                return Mathf.Lerp(Mathf.Lerp(v00, v10, tx), Mathf.Lerp(v01, v11, tx), tz);
+            }
+
+            // Local helper to Get or Create Vertex
+            int GetOrCreateVertex(int gx, int gz, float fx, float fz)
+            {
+                int flatIndex = gz * subWidth + gx;
+                if (vertexIndices[flatIndex] != -1) return vertexIndices[flatIndex];
+
+                // Data
+                float h = GetInterpHeight(fx, fz);
+                float w = GetInterpDepth(fx, fz);
+                
+                // Vertex Colors (Alpha Fade based on depth)
+                float fadeDepth = 0.5f;
+                float alpha = Mathf.Clamp01(w / fadeDepth);
+
+                int newIndex = verts.Count;
+                verts.Add(new Vector3(fx * cellSize, h, fz * cellSize));
+                colors.Add(new Color(1, 1, 1, alpha));
+                uvs.Add(new Vector2(fx * uvScale, fz * uvScale));
+                
+                vertexIndices[flatIndex] = newIndex;
+                return newIndex;
             }
 
             for (int x = 0; x < size.x - 1; x++)
@@ -412,79 +562,60 @@ namespace ClaimTycoon.Systems.Terrain
                     {
                         for (int sz = 0; sz < meshSubdivisions; sz++)
                         {
-                            // Calculate fractional coordinates 0..1 within this cell
-                            float fx0 = (float)sx / meshSubdivisions;
-                            float fz0 = (float)sz / meshSubdivisions;
-                            float fx1 = (float)(sx + 1) / meshSubdivisions;
-                            float fz1 = (float)(sz + 1) / meshSubdivisions;
+                            // Integer coordinates in the subdivided grid
+                            int gx0 = x * meshSubdivisions + sx;
+                            int gz0 = z * meshSubdivisions + sz;
+                            int gx1 = gx0 + 1;
+                            int gz1 = gz0 + 1;
 
-                            // Global coords
-                            float gx0 = x + fx0;
-                            float gz0 = z + fz0;
-                            float gx1 = x + fx1;
-                            float gz1 = z + fz1;
+                            // Float coordinates in world grid space
+                            float fx0 = (float)gx0 / meshSubdivisions;
+                            float fz0 = (float)gz0 / meshSubdivisions;
+                            float fx1 = (float)gx1 / meshSubdivisions;
+                            float fz1 = (float)gz1 / meshSubdivisions;
 
-                            // Interpolated Water Depths
-                            // Note: We clamp to ensure we don't go OOB, though the loop bounds x < size.x-1 should be safe for +1
-                            float wBL = GetInterp(map, gx0, gz0, size.x, size.y);
-                            float wBR = GetInterp(map, gx1, gz0, size.x, size.y);
-                            float wTL = GetInterp(map, gx0, gz1, size.x, size.y);
-                            float wTR = GetInterp(map, gx1, gz1, size.x, size.y);
+                            int v00 = GetOrCreateVertex(gx0, gz0, fx0, fz0);
+                            int v10 = GetOrCreateVertex(gx1, gz0, fx1, fz0);
+                            int v01 = GetOrCreateVertex(gx0, gz1, fx0, fz1);
+                            int v11 = GetOrCreateVertex(gx1, gz1, fx1, fz1);
 
-                            if (wBL <= minWaterHeight && wBR <= minWaterHeight && wTL <= minWaterHeight && wTR <= minWaterHeight)
-                                continue;
-
-                            // Interpolated Terrain Heights
-                            float tBL = GetInterpTerrain(gx0, gz0);
-                            float tBR = GetInterpTerrain(gx1, gz0);
-                            float tTL = GetInterpTerrain(gx0, gz1);
-                            float tTR = GetInterpTerrain(gx1, gz1);
-
-                            // Final Heights
-                            float hBL = tBL + wBL;
-                            float hBR = tBR + wBR;
-                            float hTL = tTL + wTL;
-                            float hTR = tTR + wTR;
-
-                            int startIndex = verts.Count;
-                            verts.Add(new Vector3(gx0 * cellSize, hBL, gz0 * cellSize));         
-                            verts.Add(new Vector3(gx1 * cellSize, hBR, gz0 * cellSize));   
-                            verts.Add(new Vector3(gx0 * cellSize, hTL, gz1 * cellSize));   
-                            verts.Add(new Vector3(gx1 * cellSize, hTR, gz1 * cellSize)); 
-
-                            uvs.Add(new Vector2(gx0 * uvScale, gz0 * uvScale));
-                            uvs.Add(new Vector2(gx1 * uvScale, gz0 * uvScale));
-                            uvs.Add(new Vector2(gx0 * uvScale, gz1 * uvScale));
-                            uvs.Add(new Vector2(gx1 * uvScale, gz1 * uvScale));
-
-                            tris.Add(startIndex);
-                            tris.Add(startIndex + 2);
-                            tris.Add(startIndex + 1);
-                            tris.Add(startIndex + 1);
-                            tris.Add(startIndex + 2);
-                            tris.Add(startIndex + 3);
+                            tris.Add(v00);
+                            tris.Add(v01);
+                            tris.Add(v10);
+                            
+                            tris.Add(v10);
+                            tris.Add(v01);
+                            tris.Add(v11);
                         }
                     }
                 }
             }
 
-            // Generate Skirts
-            float skirtDepth = -0.5f;
-            // int skirtQuads = 0; // Unused
-
+            // Generate Skirts 
+            // Simplified Skirts: Just drop down from current edge vertices
+            // Note: Since we manipulate edge heights now, standard skirts are safer.
+            float skirtDepth = -2.0f;
+            
             void AddWaterSkirt(int x1, int z1, int x2, int z2)
             {
                  if (map[x1, z1] <= minWaterHeight && map[x2, z2] <= minWaterHeight) return;
                  
-                 // skirtQuads++; 
-                 float h1 = terrainManagerCache.GetHeight(x1, z1) + map[x1, z1];
-                 float h2 = terrainManagerCache.GetHeight(x2, z2) + map[x2, z2];
+                 // Get absolute height from SurfaceMap
+                 float h1 = surfaceLevels[x1, z1];
+                 float h2 = surfaceLevels[x2, z2];
+                 
+                 // If we successfully hid the dry nodes, looking up surfaceLevels for skirts is correct.
 
                  int idx = verts.Count;
                  verts.Add(new Vector3(x1 * cellSize, h1, z1 * cellSize));        
                  verts.Add(new Vector3(x2 * cellSize, h2, z2 * cellSize));        
                  verts.Add(new Vector3(x1 * cellSize, skirtDepth, z1 * cellSize)); 
                  verts.Add(new Vector3(x2 * cellSize, skirtDepth, z2 * cellSize)); 
+
+                 colors.Add(new Color(1, 1, 1, 1));
+                 colors.Add(new Color(1, 1, 1, 1));
+                 colors.Add(new Color(1, 1, 1, 1));
+                 colors.Add(new Color(1, 1, 1, 1));
 
                  uvs.Add(new Vector2(0, 1));
                  uvs.Add(new Vector2(1, 1));
@@ -500,14 +631,11 @@ namespace ClaimTycoon.Systems.Terrain
             for (int x = size.x - 1; x > 0; x--) AddWaterSkirt(x, size.y - 1, x - 1, size.y - 1);
             for (int z = size.y - 1; z > 0; z--) AddWaterSkirt(0, z, 0, z - 1);
             
-            // Note: Skirt is not yet subdivided, so it might show small gaps if the water surface is very curved at the boundary.
-            // For now keeping it simple as the edges are usually straight or submerged.
-            
             if (waterMesh == null)
             {
                 waterMesh = new Mesh();
                 waterMesh.name = "Water Mesh";
-                waterMesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32; // Required for high subdivision
+                waterMesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32; 
                 if (waterMeshFilter != null) waterMeshFilter.mesh = waterMesh;
             }
 
@@ -515,6 +643,7 @@ namespace ClaimTycoon.Systems.Terrain
             waterMesh.SetVertices(verts);
             waterMesh.SetTriangles(tris, 0);
             waterMesh.SetUVs(0, uvs);
+            waterMesh.SetColors(colors); 
             waterMesh.RecalculateNormals();
             waterMesh.RecalculateBounds();
         }

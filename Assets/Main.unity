@@ -1007,7 +1007,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 4cf3d8bf4671243aa9a9d28b5f675231, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ClaimTycoon.Systems.TimeSystem.TimeManager
-  timeScale: 60
+  timeScale: 5
   startHour: 8
 --- !u!4 &331038598
 Transform:
@@ -4759,6 +4759,9 @@ MonoBehaviour:
   bedrockBaseHeight: -0.5
   bedrockNoiseScale: 0.1
   bedrockNoiseAmplitude: 0.5
+  surfaceNoiseScale: 0.05
+  surfaceNoiseAmplitude: 1.5
+  topSoilDepth: 1.5
 --- !u!4 &1699688422
 Transform:
   m_ObjectHideFlags: 0

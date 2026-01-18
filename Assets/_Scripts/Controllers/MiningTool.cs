@@ -50,9 +50,9 @@ namespace ClaimTycoon.Controllers
 
                 if (TerrainManager.Instance != null)
                 {
-                    Debug.Log("Mining Tool: Calling ModifyHeight");
+                    Debug.Log("Mining Tool: Calling ModifyHeight via MineTile");
                     // Just Dig at the point
-                    TerrainManager.Instance.ModifyHeight(hit.point, -0.5f);
+                    MineTile(hit.point);
                 }
             }
             else
@@ -63,15 +63,18 @@ namespace ClaimTycoon.Controllers
 
         private void MineTile(Vector3 hitPoint)
         {
-            TerrainManager.Instance.ModifyHeight(hitPoint, -0.5f);
+            DirtData data = TerrainManager.Instance.ModifyHeight(hitPoint, -0.5f);
             
-            // Chance to find gold
-            if (Random.value < miningChance)
+            float topSoilRichness = 0.1f;
+            float payLayerRichness = 1.0f;
+            float goldFound = (data.TopSoil * topSoilRichness) + (data.PayLayer * payLayerRichness);
+
+            if (goldFound > 0)
             {
-                Debug.Log("Found Gold Nugget!");
+                // Debug.Log($"Manual Mining: Found {goldFound} Gold (Top: {data.TopSoil}, Pay: {data.PayLayer})");
                 if (ResourceManager.Instance != null)
                 {
-                    ResourceManager.Instance.AddGold(0.5f);
+                    ResourceManager.Instance.AddGold(goldFound);
                 }
             }
         }

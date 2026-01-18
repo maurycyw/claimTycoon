@@ -13,6 +13,12 @@ namespace ClaimTycoon.Controllers
     public enum UnitState { Idle, Moving, Working, AutoMining }
     public enum JobType { None, Mine, DropDirt, FeedSluice, Build, CleanSluice }
 
+    public struct DirtPayload
+    {
+        public float Amount;
+        public float GoldRichness; // Gold per unit of amount
+    }
+
     [RequireComponent(typeof(NavMeshAgent))]
     [RequireComponent(typeof(CharacterStats))]
     [RequireComponent(typeof(AutoMiner))]
@@ -29,7 +35,9 @@ namespace ClaimTycoon.Controllers
         
         [Header("State")]
         [SerializeField] private UnitState currentState = UnitState.Idle;
-        public bool IsCarryingDirt { get; private set; } 
+        
+        public DirtPayload CarriedDirt { get; private set; }
+        public bool IsCarryingDirt => CarriedDirt.Amount > 0;
 
         // New Job System
         private IJob activeJob = null;
@@ -211,10 +219,10 @@ namespace ClaimTycoon.Controllers
             }
         }
 
-        public void SetCarryingDirt(bool val)
+        public void SetCarryingDirt(float amount, float richness)
         {
-            IsCarryingDirt = val;
-            animController.SetCarrying(val);
+            CarriedDirt = new DirtPayload { Amount = amount, GoldRichness = richness };
+            animController.SetCarrying(amount > 0);
         }
 
         // --- BACKWARD COMPATIBILITY WRAPPER ---

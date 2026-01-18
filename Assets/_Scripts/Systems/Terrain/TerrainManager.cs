@@ -11,6 +11,13 @@ namespace ClaimTycoon.Systems.Terrain
         Water
     }
 
+    public struct DirtData
+    {
+        public float TopSoil;
+        public float PayLayer;
+        public float Total => TopSoil + PayLayer;
+    }
+
     [RequireComponent(typeof(NavMeshSurface))]
     [RequireComponent(typeof(MeshFilter), typeof(MeshRenderer), typeof(MeshCollider))]
     public class TerrainManager : MonoBehaviour
@@ -24,99 +31,123 @@ namespace ClaimTycoon.Systems.Terrain
         public float CellSize => cellSize;
 
         [SerializeField] private float initialHeight = 2.0f;
-        [SerializeField] private float bedrockBaseHeight = -0.5f; // Renamed for clarity, acts as base
+        [SerializeField] private float bedrockBaseHeight = -0.5f; 
         [SerializeField] private float bedrockNoiseScale = 0.1f;
         [SerializeField] private float bedrockNoiseAmplitude = 0.5f;
 
+        [Header("Rolling Hills")]
+        [SerializeField] private float surfaceNoiseScale = 0.05f; // Broader hills
+        [SerializeField] private float surfaceNoiseAmplitude = 1.5f; 
+        [SerializeField] private float topSoilDepth = 1.5f; // Depth of topsoil before pay layer
+        [SerializeField] private float vegetationDepth = 0.2f; // Depth of vegetation layer
+
         private float[,] heightMap;
         private float[,] bedrockMap;
+        private float[,] payLayerLimitMap; // Height at which pay layer starts
+        private float[,] vegetationLimitMap; // Height at which vegetation ends (below this is Top Soil)
+        
         private Mesh terrainMesh;
-        private Mesh bedrockMesh; // Added bedrock mesh
+        private Mesh bedrockMesh; 
         private MeshCollider meshCollider;
         private NavMeshSurface navMeshSurface;
-
-        // Keep track of buildings for persistence (unchanged logic)
+        
+        // Keep track of buildings for persistence
         private Dictionary<Vector3Int, GameObject> occupiedTiles = new Dictionary<Vector3Int, GameObject>();
-        private Dictionary<Vector3Int, GameObject> activeTiles = new Dictionary<Vector3Int, GameObject>(); // Deprecated for mesh, but kept for building compatibility
+        private Dictionary<Vector3Int, GameObject> activeTiles = new Dictionary<Vector3Int, GameObject>(); 
 
         private void Awake()
         {
             if (Instance == null) Instance = this;
-            else Destroy(gameObject);
+            else { Destroy(gameObject); return; }
 
             navMeshSurface = GetComponent<NavMeshSurface>();
             meshCollider = GetComponent<MeshCollider>();
-            
+
+            // Ensure we use the Vertex Color shader
+            Shader vcShader = Shader.Find("Custom/VertexColor");
+            if (vcShader != null)
+            {
+                MeshRenderer mr = GetComponent<MeshRenderer>();
+                if (mr.material.shader.name != vcShader.name) 
+                {
+                    mr.material.shader = vcShader;
+                }
+            }
+
             GenerateInitialTerrain();
         }
 
         private void Start()
         {
-            // Optional: delayed updates if needed
         }
-
+        
         private void GenerateInitialTerrain()
         {
             heightMap = new float[gridSize.x, gridSize.y];
             bedrockMap = new float[gridSize.x, gridSize.y];
+            payLayerLimitMap = new float[gridSize.x, gridSize.y];
+            vegetationLimitMap = new float[gridSize.x, gridSize.y];
 
             float noiseOffset = Random.Range(0f, 100f);
+            float surfaceOffset = Random.Range(100f, 200f); 
 
-            // Initialize Heightmap and Bedrock Map
             for (int x = 0; x < gridSize.x; x++)
             {
                 for (int z = 0; z < gridSize.y; z++)
                 {
-                    // Generate Bedrock Height using Perlin Noise
-                    float noise = Mathf.PerlinNoise((x * bedrockNoiseScale) + noiseOffset, (z * bedrockNoiseScale) + noiseOffset);
-                    bedrockMap[x, z] = bedrockBaseHeight + (noise * bedrockNoiseAmplitude);
-                    // River Channel: Wider and flatter
-                    // Center roughly at x=6 to x=8
-                    
-                    // River Channel with Curvature
-                    float curveOffset = Mathf.Sin(z * 0.1f) * 3f; // Amplitude 3, Freq 0.1
-                    float centerX = 25f + curveOffset; // Center of map (50/2 = 25)
-                    
-                    // Define River Widths
-                    float riverBedHalfWidth = 2.0f; // Flat bottom radius
+                    // ... (Bedrock & Surface Noise Logic same) ...
+                    float bedNoise = Mathf.PerlinNoise((x * bedrockNoiseScale) + noiseOffset, (z * bedrockNoiseScale) + noiseOffset);
+                    bedrockMap[x, z] = bedrockBaseHeight + (bedNoise * bedrockNoiseAmplitude);
+
+                    float surfNoise = Mathf.PerlinNoise((x * surfaceNoiseScale) + surfaceOffset, (z * surfaceNoiseScale) + surfaceOffset);
+                    float surfaceHeight = initialHeight + (surfNoise * surfaceNoiseAmplitude);
+
+                    // ... (River Logic same) ...
+                    float curveOffset = Mathf.Sin(z * 0.1f) * 3f; 
+                    float centerX = 25f + curveOffset; 
+                    float riverBedHalfWidth = 2.0f; 
                     float innerBankWidth = 1.0f;
                     float middleBankWidth = 1.0f;
                     float outerBankWidth = 1.0f;
-                    
                     float distFromCenter = Mathf.Abs(x - centerX);
-                    
-                    if (distFromCenter <= riverBedHalfWidth + innerBankWidth + middleBankWidth + outerBankWidth) // Total Valley Width
+                    float totalBankWidth = innerBankWidth + middleBankWidth + outerBankWidth; 
+                    if (distFromCenter <= riverBedHalfWidth + totalBankWidth) 
                     {
-                        float h = 0f;
+                        // Calculate interpolation factor 't' from 0 (deepest part/water edge) to 1 (top of bank)
+                        // 0 to riverBedHalfWidth is flat bottom (t=0)
+                        float t = 0f;
+                        if (distFromCenter > riverBedHalfWidth)
+                        {
+                            t = (distFromCenter - riverBedHalfWidth) / totalBankWidth;
+                            // Apply SmoothStep for Natural Curve
+                            t = t * t * (3f - 2f * t);
+                        }
+
+                        // Determine the theoretical river bank height at this X,Z
+                        // We assume the river cuts into the generated surface noise.
+                        // We want to blend from 0.0f (River Bottom) to surfaceHeight (Original Noise)
                         
-                        if (distFromCenter <= riverBedHalfWidth) 
-                        {
-                            // River Bed (Flat Bottom)
-                            h = 0.0f; 
-                        }
-                        else if (distFromCenter <= riverBedHalfWidth + innerBankWidth)
-                        {
-                            // Inner Banks
-                            h = 0.5f;
-                        }
-                        else if (distFromCenter <= riverBedHalfWidth + innerBankWidth + middleBankWidth)
-                        {
-                            // Middle Banks
-                            h = 1.0f;
-                        }
-                        else 
-                        {
-                            // Outer Banks
-                            h = 1.5f;
-                        }
-                        
-                        heightMap[x, z] = h;
-                    }
-                    else
-                    {
-                         heightMap[x, z] = initialHeight;
+                        float riverCarveHeight = Mathf.Lerp(0.0f, surfaceHeight, t);
+
+                        // Ensure we actually carve downwards
+                        if (riverCarveHeight < surfaceHeight) surfaceHeight = riverCarveHeight;
                     }
 
+                    heightMap[x, z] = surfaceHeight;
+
+                    // Calculate Limits
+                    // Vegetation Limit: Surface - VegDepth
+                    float vegLimit = surfaceHeight - vegetationDepth;
+                    if (vegLimit < bedrockMap[x, z] + 0.05f) vegLimit = bedrockMap[x, z] + 0.05f;
+                    vegetationLimitMap[x, z] = vegLimit;
+
+                    // Pay Layer Limit: Surface - TopSoilDepth
+                    // Note: If topSoilDepth includes VegDepth? Usually "Top Soil" starts BELOW Veg.
+                    // Let's assume user structure: [Veg (Green)] -> [Top Soil (Light Brown)] -> [Pay Layer (Dark Brown)]
+                    // So pay limit is lower than vegetation limit.
+                    float payLimit = surfaceHeight - topSoilDepth;
+                    if (payLimit < bedrockMap[x, z] + 0.01f) payLimit = bedrockMap[x, z] + 0.01f;
+                    payLayerLimitMap[x, z] = payLimit;
                 }
             }
 
@@ -146,9 +177,9 @@ namespace ClaimTycoon.Systems.Terrain
         {
             if (terrainMesh == null)
             {
-                terrainMesh = MeshGenerator.GenerateTerrainMesh(heightMap, cellSize);
+                terrainMesh = MeshGenerator.GenerateTerrainMesh(heightMap, payLayerLimitMap, vegetationLimitMap, cellSize);
                 GetComponent<MeshFilter>().mesh = terrainMesh;
-                meshCollider.sharedMesh = terrainMesh; // Important for Raycast
+                meshCollider.sharedMesh = terrainMesh; 
                 
                 // Create Bedrock Visual Object if not exists
                 Transform bedrockTrans = transform.Find("BedrockMeshDetails");
@@ -164,27 +195,25 @@ namespace ClaimTycoon.Systems.Terrain
                     bedrockObj = bedrockTrans.gameObject;
                 }
                 
-                // Generate Bedrock Mesh (Similar to Terrain but for Bedrock Map)
-                bedrockMesh = MeshGenerator.GenerateTerrainMesh(bedrockMap, cellSize, false);
+                bedrockMesh = MeshGenerator.GenerateTerrainMesh(bedrockMap, null, null, cellSize, false);
                 bedrockObj.GetComponent<MeshFilter>().mesh = bedrockMesh;
-                // No collider needed for bedrock logic usually, unless we want to click it?
             }
             else
             {
-                MeshGenerator.UpdateMeshVertices(terrainMesh, heightMap, cellSize);
+                MeshGenerator.UpdateMeshVertices(terrainMesh, heightMap, payLayerLimitMap, vegetationLimitMap, cellSize);
                 meshCollider.sharedMesh = terrainMesh;
                 
-                // Update Bedrock Mesh (It shouldn't change often but for safety)
                 if (bedrockMesh != null)
-                     MeshGenerator.UpdateMeshVertices(bedrockMesh, bedrockMap, cellSize, false);
+                     MeshGenerator.UpdateMeshVertices(bedrockMesh, bedrockMap, null, null, cellSize, false);
             }
             
-            // Rebuild NavMesh
             if (navMeshSurface != null) navMeshSurface.BuildNavMesh();
         }
 
-        public void ModifyHeight(Vector3 worldPoint, float amount)
+        // Returns { TopSoilRemoved, PayLayerRemoved }
+        public DirtData ModifyHeight(Vector3 worldPoint, float amount)
         {
+            DirtData data = new DirtData();
             int x = Mathf.RoundToInt(worldPoint.x / cellSize);
             int z = Mathf.RoundToInt(worldPoint.z / cellSize);
 
@@ -192,12 +221,57 @@ namespace ClaimTycoon.Systems.Terrain
 
             if (x >= 0 && x < gridSize.x && z >= 0 && z < gridSize.y)
             {
-                // Prevent digging below bedrock
+                float currentHeight = heightMap[x, z];
                 float currentBedrock = bedrockMap[x, z];
-                if (heightMap[x, z] + amount < currentBedrock)
+                float payLimit = payLayerLimitMap[x, z];
+
+                // Prevent digging below bedrock
+                if (currentHeight + amount < currentBedrock)
                 {
-                    amount = currentBedrock - heightMap[x, z]; // Clamp
-                    if (Mathf.Abs(amount) < 0.01f) return; // Hit bottom
+                    amount = currentBedrock - currentHeight; 
+                    if (Mathf.Abs(amount) < 0.001f) return data; // Hit bottom, no dirt removed
+                }
+
+                // If removing dirt (negative amount implies adding digging, wait. 
+                // In MineJob: ModifyHeight(targetPos, -0.5f). So negative amount is digging.
+                // But "amount" passed is negative. 
+                // So "removed amount" strictly positive is -amount.
+                
+                if (amount < 0) // Digging
+                {
+                    float digAmount = -amount;
+                    float heightAfterDig = currentHeight - digAmount;
+
+                    // Calculate Layers
+                    // Range [heightAfterDig, currentHeight]
+                    // Limit is payLimit.
+                    
+                    // Case 1: All above pay limit (Top Soil)
+                    if (heightAfterDig >= payLimit)
+                    {
+                        data.TopSoil = digAmount;
+                        data.PayLayer = 0;
+                    }
+                    // Case 2: All below pay limit (Pay Layer)
+                    else if (currentHeight <= payLimit)
+                    {
+                        data.TopSoil = 0;
+                        data.PayLayer = digAmount;
+                    }
+                    // Case 3: Crossing the boundary
+                    else 
+                    {
+                        // Some top soil, some pay layer
+                        data.TopSoil = currentHeight - payLimit;
+                        data.PayLayer = payLimit - heightAfterDig;
+                    }
+                }
+                else // Adding dirt (Dropping)
+                {
+                    // For now, dropping just adds "Top Soil" effectively, or just generic dirt.
+                    // We don't really track richness of placed dirt in the map yet.
+                    // Just accept it.
+                    // data returned is 0 because we didn't harvest anything.
                 }
 
                 heightMap[x, z] += amount;
@@ -211,6 +285,7 @@ namespace ClaimTycoon.Systems.Terrain
 
                 UpdateMesh();
             }
+            return data;
         }
 
         private void SmoothNeighbor(int x, int z, float amount)
@@ -225,8 +300,6 @@ namespace ClaimTycoon.Systems.Terrain
             }
         }
 
-        // --- Backward Compatibility for Building Manager ---
-        
         public void RegisterBuilding(Vector3Int coord, GameObject building)
         {
              if (!occupiedTiles.ContainsKey(coord)) occupiedTiles[coord] = building;
@@ -238,7 +311,6 @@ namespace ClaimTycoon.Systems.Terrain
         {
             if (coord.x >= 0 && coord.x < gridSize.x && coord.z >= 0 && coord.z < gridSize.y)
             {
-                // If we are at or near bedrock, report Bedrock
                 if (heightMap[coord.x, coord.z] <= bedrockMap[coord.x, coord.z] + 0.1f)
                 {
                     type = TileType.Bedrock;
@@ -253,8 +325,6 @@ namespace ClaimTycoon.Systems.Terrain
             return false;
         }
         
-        // --- Persistence Stubs (Need Refactor for Heightmap) ---
-        // For now preventing errors
         public List<Vector3Int> GetRemovedTiles() => new List<Vector3Int>();
         public void RestoreRemovedTiles(List<Vector3Int> list) { }
         public bool IsAdjacentToWater(Vector3Int coord) => false; 

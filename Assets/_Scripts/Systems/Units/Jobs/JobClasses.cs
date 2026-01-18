@@ -56,9 +56,26 @@ namespace ClaimTycoon.Systems.Units.Jobs
                  Vector3 targetPos = new Vector3(TargetCoord.x * TerrainManager.Instance.CellSize, 0, TargetCoord.z * TerrainManager.Instance.CellSize);
                  try
                  {
-                     TerrainManager.Instance.ModifyHeight(targetPos, -0.5f);
-                     unit.SetCarryingDirt(true);
-                     Debug.Log($"MineJob Complete. Mined at {TargetCoord}");
+                     DirtData data = TerrainManager.Instance.ModifyHeight(targetPos, -0.5f);
+                     
+                     float total = data.Total;
+                     float richness = 0f;
+                     
+                     if (total > 0.001f)
+                     {
+                         // Richness Logic
+                         float topSoilRichness = 0.1f;
+                         float payLayerRichness = 1.0f;
+                         richness = ((data.TopSoil * topSoilRichness) + (data.PayLayer * payLayerRichness)) / total;
+                     }
+                     
+                     // We actually mined 'total' amount.
+                     // But previously we just assumed we are carrying "a load".
+                     // Ideally we carry what we dug. But if we dug 0.2 because of bedrock?
+                     // Let's assume we carry what we dug.
+                     
+                     unit.SetCarryingDirt(total, richness);
+                     Debug.Log($"MineJob Complete. Mined {total} dirt (Richness: {richness}) at {TargetCoord}");
                  }
                  catch (System.Exception e)
                  {
@@ -79,7 +96,7 @@ namespace ClaimTycoon.Systems.Units.Jobs
             float cellSize = TerrainManager.Instance.CellSize;
             Vector3 targetPos = new Vector3(TargetCoord.x * cellSize, 0, TargetCoord.z * cellSize);
             TerrainManager.Instance.ModifyHeight(targetPos, 0.5f);
-            unit.SetCarryingDirt(false);
+            unit.SetCarryingDirt(0, 0);
         }
     }
 
@@ -97,8 +114,8 @@ namespace ClaimTycoon.Systems.Units.Jobs
         {
             if (sluice != null)
             {
-                sluice.AddDirt(0.5f);
-                unit.SetCarryingDirt(false);
+                sluice.AddDirt(unit.CarriedDirt.Amount, unit.CarriedDirt.GoldRichness);
+                unit.SetCarryingDirt(0, 0);
             }
         }
     }

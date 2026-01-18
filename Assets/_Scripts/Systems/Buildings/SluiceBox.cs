@@ -57,7 +57,7 @@ namespace ClaimTycoon.Systems.Buildings
                 warningBubble.SetActive(!isValidPlacement);
         }
 
-        public void AddDirt(float amount)
+        public void AddDirt(float amount, float richness)
         {
             if (!isValidPlacement)
             {
@@ -72,24 +72,20 @@ namespace ClaimTycoon.Systems.Buildings
             }
             
             storedDirt += amount;
-            Debug.Log($"SluiceBox: Added {amount} Dirt. Total: {storedDirt}");
+            Debug.Log($"SluiceBox: Added {amount} Dirt (Richness: {richness}). Total: {storedDirt}");
             
-            // Process immediately or over time? 
-            // "cleanup which takes time but is when the gold is finally tallied"
-            // So we just store dirt for now? Or convert to accumulated gold?
-            // "remove automatic pay... based off cubic meters fed"
-            // "cleanup... takes time... when gold is tallied"
-            
-            // Let's verify: Dirt -> [Processing...] -> Accumulated Gold -> [Cleanup] -> Wallet
-            // For simplicity: Feeding it instantly converts to "Potential Gold" (Accumulated)
-            // But you can't get it until Cleanup.
-            
-            ProcessDirt(amount);
+            ProcessDirt(amount, richness);
         }
 
-        private void ProcessDirt(float amount)
+        private void ProcessDirt(float amount, float richness)
         {
-             accumulatedGold += amount * goldPerDirt;
+             // Use richness instead of static goldPerDirt if desired, 
+             // OR combine them. Let's say richness IS the gold per unit.
+             // If we want to keep goldPerDirt as a multiplier (efficiency), we can do: logic = amount * richness * efficiency
+             // But the plan says: "Calculate accumulated gold... accumulatedGold += amount * richness"
+             // I'll stick to that.
+             
+             accumulatedGold += amount * richness;
         }
 
         public void Interact() // Called by player tap
