@@ -169,6 +169,9 @@ namespace ClaimTycoon.Systems.Terrain
             }
 
             UpdateWaterMesh();
+            
+            // Refresh Terrain Mesh to apply Water/Stone colors
+            if (terrainManagerCache != null) terrainManagerCache.UpdateMesh();
         }
 
         private void ConfigureTransparency()
@@ -227,6 +230,78 @@ namespace ClaimTycoon.Systems.Terrain
             }
 
             if (!simulateWater) return;
+            
+            // Update Particles Flow
+            if (foamParticleSystem != null)
+            {
+                int maxParticles = foamParticleSystem.main.maxParticles;
+                ParticleSystem.Particle[] particles = new ParticleSystem.Particle[maxParticles];
+                int count = foamParticleSystem.GetParticles(particles);
+                bool changed = false;
+
+                for (int i = 0; i < count; i++)
+                {
+                    // Calculate flow direction at this Z pos
+                    float z = particles[i].position.z;
+                    
+                    // Center of river at this Z
+                    float targetCenterX = 25f + Mathf.Sin(z * 0.1f) * 3f;
+                    
+                    // Derivative for flow direction
+                    float dx_dz = 0.3f * Mathf.Cos(z * 0.1f);
+                    
+                    // Base Flow Direction (Downstream)
+                    Vector3 flowDir = new Vector3(-dx_dz, 0, -1f).normalized;
+                    
+                    // Centering Force (Relaxed to avoid single line)
+                    // Keep particles in the river channel but allow spread.
+                    float x = particles[i].position.x;
+                    float offset = x - targetCenterX;
+                    
+                    Vector3 correction = Vector3.zero;
+                    
+                    // Only push back if drifting too close to the edge (River width ~5-6 radius)
+                    // Safe zone +/- 3.0f
+                    if (Mathf.Abs(offset) > 3.0f)
+                    {
+                        // Gentle nudge back
+                        correction = new Vector3(-offset * 0.5f, 0, 0); 
+                    }
+                    else
+                    {
+                        // Add slight organic noise to keep them spreading
+                        // Use particle ID or randomized seed
+                        uint seed = particles[i].randomSeed;
+                        float noise = (Mathf.PerlinNoise(seed * 0.1f, Time.time * 0.5f) - 0.5f) * 0.5f;
+                        correction = new Vector3(noise, 0, 0);
+                    }
+                    
+                    // Combine Flow + Correction
+                    // Verify speed
+                    float speed = 2.0f;
+                    
+                    // We blend the flow direction with the correction
+                    Vector3 finalVelocity = (flowDir * speed) + correction;
+                    
+                    particles[i].velocity = finalVelocity;
+                    
+                    // Manual Kill Zone: Kill particles when they leave the map (Z <= 0)
+                    if (particles[i].position.z <= 0f)
+                    {
+                        particles[i].remainingLifetime = 0f;
+                    }
+
+                    // Pulsate Opacity
+                    // Unique offset per particle so they don't flash in sync
+                    float uniqueOffset = particles[i].randomSeed * 0.1f;
+                    // Pulse between 0.1 and 0.8 alpha
+                    float pulse = 0.1f + 0.7f * (0.5f + 0.5f * Mathf.Sin(Time.time * 3.0f + uniqueOffset));
+                    
+                    particles[i].startColor = new Color(1, 1, 1, pulse);
+                }
+
+                if (count > 0) foamParticleSystem.SetParticles(particles, count);
+            }
 
             tickTimer += Time.deltaTime;
             if (tickTimer > 0.1f) 
@@ -279,7 +354,7 @@ namespace ClaimTycoon.Systems.Terrain
             var main = foamParticleSystem.main;
             main.startColor = new Color(1, 1, 1, 0.6f);
             main.startSize = 0.3f;
-            main.startLifetime = 2f;
+            main.startLifetime = 100f; // Long buffer, killed manually at Z=0
             main.startSpeed = 0f; 
             main.simulationSpace = ParticleSystemSimulationSpace.World;
             
@@ -288,15 +363,24 @@ namespace ClaimTycoon.Systems.Terrain
 
             var shape = foamParticleSystem.shape;
             shape.shapeType = ParticleSystemShapeType.Box;
-            shape.scale = new Vector3(12f, 0.1f, 50f); 
-            particleObj.transform.localPosition = new Vector3(25f, 1.85f, 25f);
+            // Emit at the top of the map
+            shape.scale = new Vector3(8f, 0.1f, 1f); 
+            
+            // Move emitter to EXACT start of river at top edge
+            // Logic: center = 25 + Sin(z*0.1)*3
+            float startZ = 49f; 
+            if (TerrainManager.Instance != null) startZ = TerrainManager.Instance.GridSize.y - 1.0f;
+
+            float curveOffset = Mathf.Sin(startZ * 0.1f) * 3f;
+            float startX = 25f + curveOffset;
+
+            particleObj.transform.position = new Vector3(startX * terrainManagerCache.CellSize, 1.85f, startZ * terrainManagerCache.CellSize);
+            // Use local position if parented, but we want world alignment?
+            // Since parent is at 0,0,0, local=world.
+            particleObj.transform.localPosition = new Vector3(startX, 1.85f, startZ);
 
             var velocityOverLifetime = foamParticleSystem.velocityOverLifetime;
-            velocityOverLifetime.enabled = true;
-            // Flow along negative Z
-            velocityOverLifetime.z = new ParticleSystem.MinMaxCurve(-2f, -1f); 
-            velocityOverLifetime.x = new ParticleSystem.MinMaxCurve(-0.2f, 0.2f); 
-            velocityOverLifetime.y = new ParticleSystem.MinMaxCurve(0f, 0f);
+            velocityOverLifetime.enabled = false; // We control velocity in Update manually
 
             var renderer = particleObj.GetComponent<ParticleSystemRenderer>();
             renderer.material = new Material(Shader.Find("Particles/Standard Unlit")); 
@@ -542,7 +626,17 @@ namespace ClaimTycoon.Systems.Terrain
                 int newIndex = verts.Count;
                 verts.Add(new Vector3(fx * cellSize, h, fz * cellSize));
                 colors.Add(new Color(1, 1, 1, alpha));
-                uvs.Add(new Vector2(fx * uvScale, fz * uvScale));
+                
+                // Flow-Based UVs
+                // Instead of U = X, we use U = Distance from River Center.
+                // This "unwinds" the river so texture flows along path.
+                float curveOffset = Mathf.Sin(fz * 0.1f) * 3f;
+                float riverCenterX = 25f + curveOffset;
+                
+                float u = (fx - riverCenterX) * uvScale;
+                float v = fz * uvScale;
+                
+                uvs.Add(new Vector2(u, v));
                 
                 vertexIndices[flatIndex] = newIndex;
                 return newIndex;

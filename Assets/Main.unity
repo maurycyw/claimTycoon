@@ -4762,6 +4762,7 @@ MonoBehaviour:
   surfaceNoiseScale: 0.05
   surfaceNoiseAmplitude: 1.5
   topSoilDepth: 1.5
+  vegetationDepth: 0.2
 --- !u!4 &1699688422
 Transform:
   m_ObjectHideFlags: 0
@@ -4908,7 +4909,7 @@ MonoBehaviour:
   uvScale: 0.1
   waterScrollVelocity: {x: 0, y: 0.5}
   generateNoiseTexture: 1
-  particleEmissionRate: 20
+  particleEmissionRate: 10
   simulateWater: 1
 --- !u!1001 &1757063814
 PrefabInstance:

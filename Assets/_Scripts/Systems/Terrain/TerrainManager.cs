@@ -102,15 +102,28 @@ namespace ClaimTycoon.Systems.Terrain
                     float surfNoise = Mathf.PerlinNoise((x * surfaceNoiseScale) + surfaceOffset, (z * surfaceNoiseScale) + surfaceOffset);
                     float surfaceHeight = initialHeight + (surfNoise * surfaceNoiseAmplitude);
 
-                    // ... (River Logic same) ...
+                    // River & Mountain Logic
                     float curveOffset = Mathf.Sin(z * 0.1f) * 3f; 
                     float centerX = 25f + curveOffset; 
+                    float distFromCenter = Mathf.Abs(x - centerX);
+                    
+                    // Mountain Generation (Valley Effect)
+                    // Rise up as we get further from river banks (approx dist 5)
+                    float mountainStartDist = 5.5f;
+                    if (distFromCenter > mountainStartDist)
+                    {
+                        float dist = distFromCenter - mountainStartDist;
+                        // Exponential rise for mountainous feel
+                        float zGrowthMod = Mathf.Lerp(0.4f, 1.0f, (float)z / gridSize.y);
+                        surfaceHeight += Mathf.Pow(dist, 1.5f) * 0.0078125f * zGrowthMod;
+                    }
+
                     float riverBedHalfWidth = 2.0f; 
                     float innerBankWidth = 1.0f;
                     float middleBankWidth = 1.0f;
                     float outerBankWidth = 1.0f;
-                    float distFromCenter = Mathf.Abs(x - centerX);
                     float totalBankWidth = innerBankWidth + middleBankWidth + outerBankWidth; 
+                    
                     if (distFromCenter <= riverBedHalfWidth + totalBankWidth) 
                     {
                         // Calculate interpolation factor 't' from 0 (deepest part/water edge) to 1 (top of bank)
@@ -123,9 +136,8 @@ namespace ClaimTycoon.Systems.Terrain
                             t = t * t * (3f - 2f * t);
                         }
 
-                        // Determine the theoretical river bank height at this X,Z
-                        // We assume the river cuts into the generated surface noise.
-                        // We want to blend from 0.0f (River Bottom) to surfaceHeight (Original Noise)
+                        // Determine the theoretical river bank height
+                        // Blend from 0.0f (River Bottom) to surfaceHeight (Original Noise)
                         
                         float riverCarveHeight = Mathf.Lerp(0.0f, surfaceHeight, t);
 
@@ -173,8 +185,22 @@ namespace ClaimTycoon.Systems.Terrain
         }
 
 
-        private void UpdateMesh()
+        private Texture2D terrainTexture;
+
+        public void UpdateMesh()
         {
+            // Update Texture (High Resolution for Smooth Curves)
+            if (terrainTexture != null) Destroy(terrainTexture);
+            terrainTexture = MeshGenerator.GenerateTerrainTexture(heightMap, payLayerLimitMap, vegetationLimitMap, cellSize);
+            GetComponent<MeshRenderer>().material.mainTexture = terrainTexture;
+            
+            // Ensure Vertex Colors don't tint the texture weirdly (MeshGen sets them to White now)
+            GetComponent<MeshRenderer>().material.color = Color.white;
+            
+            // Restore sun glare/smoothness
+            GetComponent<MeshRenderer>().material.SetFloat("_Glossiness", 0.25f);
+            GetComponent<MeshRenderer>().material.SetFloat("_Metallic", 0.0f);
+
             if (terrainMesh == null)
             {
                 terrainMesh = MeshGenerator.GenerateTerrainMesh(heightMap, payLayerLimitMap, vegetationLimitMap, cellSize);
@@ -189,8 +215,14 @@ namespace ClaimTycoon.Systems.Terrain
                     bedrockObj.transform.SetParent(transform);
                     bedrockObj.transform.localPosition = Vector3.zero;
                     bedrockObj.AddComponent<MeshFilter>();
-                    bedrockObj.AddComponent<MeshRenderer>().material = GetComponent<MeshRenderer>().sharedMaterial;
-                    bedrockObj.GetComponent<Renderer>().material.color = Color.gray;
+                    
+                    // Separate Material for Bedrock (Gray, No Texture)
+                    MeshRenderer bedrockRen = bedrockObj.AddComponent<MeshRenderer>();
+                    Material baseMat = GetComponent<MeshRenderer>().sharedMaterial;
+                    Material bedrockMat = new Material(baseMat);
+                    bedrockMat.mainTexture = null;
+                    bedrockMat.color = Color.gray;
+                    bedrockRen.material = bedrockMat;
                 } else {
                     bedrockObj = bedrockTrans.gameObject;
                 }
