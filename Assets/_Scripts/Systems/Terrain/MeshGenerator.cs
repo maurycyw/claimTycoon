@@ -150,7 +150,8 @@ namespace ClaimTycoon.Systems.Terrain
            int texW = width * resMultiplier;
            int texH = depth * resMultiplier;
            
-           Texture2D texture = new Texture2D(texW, texH);
+           // Disable MipMaps (last false) to prevent blurring/ringing at distance
+           Texture2D texture = new Texture2D(texW, texH, TextureFormat.RGBA32, false);
            texture.filterMode = FilterMode.Bilinear;
            texture.wrapMode = TextureWrapMode.Clamp;
            

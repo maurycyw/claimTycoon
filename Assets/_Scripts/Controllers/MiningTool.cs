@@ -10,7 +10,7 @@ namespace ClaimTycoon.Controllers
         [Header("Settings")]
         [SerializeField] private LayerMask terrainLayer;
         [SerializeField] private float range = 100f;
-        [SerializeField] private float miningChance = 0.2f; // Base chance to find gold
+        // [SerializeField] private float miningChance = 0.2f; // Base chance to find gold (Unused)
 
         private Camera mainCamera;
 

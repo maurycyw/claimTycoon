@@ -1141,6 +1141,7 @@ GameObject:
   - component: {fileID: 410087041}
   - component: {fileID: 410087040}
   - component: {fileID: 410087042}
+  - component: {fileID: 410087043}
   m_Layer: 0
   m_Name: Directional Light
   m_TagString: Untagged
@@ -1257,6 +1258,153 @@ MonoBehaviour:
   m_ShadowLayerMask: 1
   m_RenderingLayers: 1
   m_ShadowRenderingLayers: 1
+--- !u!114 &410087043
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 410087039}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 62ad45e3e104e41f3be10ca905626d50, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::ClaimTycoon.Systems.TimeSystem.DayNightCycle
+  sunLight: {fileID: 410087040}
+  sunColor:
+    serializedVersion: 2
+    key0: {r: 1, g: 1, b: 1, a: 1}
+    key1: {r: 1, g: 1, b: 1, a: 1}
+    key2: {r: 0, g: 0, b: 0, a: 0}
+    key3: {r: 0, g: 0, b: 0, a: 0}
+    key4: {r: 0, g: 0, b: 0, a: 0}
+    key5: {r: 0, g: 0, b: 0, a: 0}
+    key6: {r: 0, g: 0, b: 0, a: 0}
+    key7: {r: 0, g: 0, b: 0, a: 0}
+    ctime0: 0
+    ctime1: 65535
+    ctime2: 0
+    ctime3: 0
+    ctime4: 0
+    ctime5: 0
+    ctime6: 0
+    ctime7: 0
+    atime0: 0
+    atime1: 65535
+    atime2: 0
+    atime3: 0
+    atime4: 0
+    atime5: 0
+    atime6: 0
+    atime7: 0
+    m_Mode: 0
+    m_ColorSpace: -1
+    m_NumColorKeys: 2
+    m_NumAlphaKeys: 2
+  ambientColor:
+    serializedVersion: 2
+    key0: {r: 0.8773585, g: 0.7509648, b: 0.6166341, a: 1}
+    key1: {r: 1, g: 1, b: 1, a: 1}
+    key2: {r: 0, g: 0, b: 0, a: 0}
+    key3: {r: 0, g: 0, b: 0, a: 0}
+    key4: {r: 0, g: 0, b: 0, a: 0}
+    key5: {r: 0, g: 0, b: 0, a: 0}
+    key6: {r: 0, g: 0, b: 0, a: 0}
+    key7: {r: 0, g: 0, b: 0, a: 0}
+    ctime0: 0
+    ctime1: 65535
+    ctime2: 0
+    ctime3: 0
+    ctime4: 0
+    ctime5: 0
+    ctime6: 0
+    ctime7: 0
+    atime0: 0
+    atime1: 65535
+    atime2: 0
+    atime3: 0
+    atime4: 0
+    atime5: 0
+    atime6: 0
+    atime7: 0
+    m_Mode: 0
+    m_ColorSpace: -1
+    m_NumColorKeys: 2
+    m_NumAlphaKeys: 2
+  sunIntensity:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    - serializedVersion: 3
+      time: 0.2
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    - serializedVersion: 3
+      time: 0.25
+      value: 0.5
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    - serializedVersion: 3
+      time: 0.5
+      value: 1
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    - serializedVersion: 3
+      time: 0.75
+      value: 0.5
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    - serializedVersion: 3
+      time: 0.8
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    - serializedVersion: 3
+      time: 1
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  maxSunIntensity: 1
+  shadowDistance: 250
+  shadowBias: 0.02
+  shadowNormalBias: 0.2
+  sunYRotation: 170
 --- !u!1 &426127167
 GameObject:
   m_ObjectHideFlags: 0
@@ -2865,7 +3013,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 3942038642883456187, guid: 0cdfaa28630654fd3945bbe3a92ed396, type: 3}
       propertyPath: m_LocalPosition.y
-      value: 0
+      value: -0.5
       objectReference: {fileID: 0}
     - target: {fileID: 3942038642883456187, guid: 0cdfaa28630654fd3945bbe3a92ed396, type: 3}
       propertyPath: m_LocalPosition.z
@@ -4753,7 +4901,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 781623eff3f534859a474b9c127c374c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ClaimTycoon.Systems.Terrain.TerrainManager
-  gridSize: {x: 100, y: 100}
+  gridSize: {x: 200, y: 200}
   cellSize: 1
   initialHeight: 2
   bedrockBaseHeight: -0.5
@@ -4763,6 +4911,34 @@ MonoBehaviour:
   surfaceNoiseAmplitude: 1.5
   topSoilDepth: 1.5
   vegetationDepth: 0.2
+  treePrefabs:
+  - {fileID: 7110244386096816120, guid: 4576a9a1a62085c41b247d6ef0aef47e, type: 3}
+  - {fileID: 1392120397935314601, guid: dc6e087a17b42d04ea13e247f2a56a84, type: 3}
+  - {fileID: 8156462787091257730, guid: 4516dee851c50de4d859a6e555b3295a, type: 3}
+  - {fileID: 7118406405027568734, guid: 48ab235746373af41908474fd459a59d, type: 3}
+  rockPrefabs:
+  - {fileID: 4476822475863616783, guid: 1dd414aa92300a34f89e91f300809226, type: 3}
+  - {fileID: 9088790805901801655, guid: 0c7b009a1a63bd044b5385d89d8086a8, type: 3}
+  - {fileID: 1088006282286415963, guid: cff778efa235fa14e9778becf763c9fb, type: 3}
+  bushPrefab: {fileID: 8566192828910185888, guid: 57dcdab022c494f4187a55f71dbe694c, type: 3}
+  grassPrefabs:
+  - {fileID: 3401824311106453741, guid: 2e5128ce3143850418854e3b2905eed5, type: 3}
+  - {fileID: 6696424339110640410, guid: 19db92f1216ceae489fe3e1da857f6b2, type: 3}
+  - {fileID: 545432545576680411, guid: 18e24e1d6e64e534eb1b05f5042455cb, type: 3}
+  mushroomPrefab: {fileID: 2301052833735681562, guid: 7c0931fe67a49864db066c8d7df171d2, type: 3}
+  branchPrefab: {fileID: 8740334679890335075, guid: 45bc2c8b510e20747a59c4cfc3cbb102, type: 3}
+  treeDensity: 0.2
+  rockDensity: 0.2
+  bushDensity: 0.2
+  grassDensity: 0.2
+  mushroomDensity: 0.05
+  branchDensity: 0.05
+  treeScaleRange: {x: 0.4, y: 0.7}
+  rockScaleRange: {x: 0.3, y: 0.6}
+  bushScaleRange: {x: 0.5, y: 0.9}
+  grassScaleRange: {x: 0.8, y: 1.2}
+  mushroomScaleRange: {x: 0.5, y: 1}
+  branchScaleRange: {x: 0.5, y: 1}
 --- !u!4 &1699688422
 Transform:
   m_ObjectHideFlags: 0
@@ -4907,9 +5083,9 @@ MonoBehaviour:
   preWarmIterations: 500
   meshSubdivisions: 2
   uvScale: 0.1
-  waterScrollVelocity: {x: 0, y: 0.5}
+  waterScrollVelocity: {x: 0, y: 0.7}
   generateNoiseTexture: 1
-  particleEmissionRate: 10
+  particleEmissionRate: 5
   simulateWater: 1
 --- !u!1001 &1757063814
 PrefabInstance:

@@ -237,7 +237,7 @@ namespace ClaimTycoon.Systems.Terrain
                 int maxParticles = foamParticleSystem.main.maxParticles;
                 ParticleSystem.Particle[] particles = new ParticleSystem.Particle[maxParticles];
                 int count = foamParticleSystem.GetParticles(particles);
-                bool changed = false;
+                // bool changed = false; // Unused
 
                 for (int i = 0; i < count; i++)
                 {

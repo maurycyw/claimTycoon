@@ -19,6 +19,15 @@ namespace ClaimTycoon.Controllers
         [SerializeField] private float rotationSpeed = 100f;
         [SerializeField] private LayerMask groundLayer;
 
+        private void Start()
+        {
+            if (GetComponent<Camera>() != null)
+            {
+                // Fix Z-Fighting / Ring Artifacts by increasing Near Clip
+                GetComponent<Camera>().nearClipPlane = 0.5f;
+            }
+        }
+
         private void Update()
         {
             HandleMovement();

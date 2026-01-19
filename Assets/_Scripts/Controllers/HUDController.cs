@@ -38,8 +38,8 @@ namespace ClaimTycoon.Controllers
         private void Start()
         {
             // Find references if missing (Fallbacks) - Include Inactive!
-            if (inventoryUI == null) inventoryUI = FindObjectOfType<InventoryUI>(true);
-            if (shopController == null) shopController = FindObjectOfType<ShopController>(true);
+            if (inventoryUI == null) inventoryUI = (InventoryUI)Object.FindFirstObjectByType(typeof(InventoryUI), FindObjectsInactive.Include);
+            if (shopController == null) shopController = (ShopController)Object.FindFirstObjectByType(typeof(ShopController), FindObjectsInactive.Include);
 
             // Subscribe to events
             if (ResourceManager.Instance != null)

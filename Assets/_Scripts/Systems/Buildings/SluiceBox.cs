@@ -11,7 +11,7 @@ namespace ClaimTycoon.Systems.Buildings
     public class SluiceBox : MonoBehaviour
     {
         [Header("Production Settings")]
-        [SerializeField] private float goldPerDirt = 0.5f;
+        // [SerializeField] private float goldPerDirt = 0.5f; // Unused
         [SerializeField] private float storedDirt = 0f;
         [SerializeField] private float maxDirtCapacity = 5.0f;
         [SerializeField] private float accumulatedGold = 0f;
